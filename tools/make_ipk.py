@@ -82,7 +82,14 @@ def main():
                   ("homehook/libmytvhook.so", read(os.path.join(a.homehook, "libmytvhook.so")), 0o755),
                   ("homehook/watch.sh", read("homehook/watch.sh"), 0o755)]
         dirs.append(root + "/homehook")
-    data = tar_gz([(d, None, 0o755) for d in dirs] + [(f"{root}/{n}", b, m) for n, b, m in files])
+    # ares-package writes this too. webosbrew's ipk-verify refuses a package without it.
+    pkg_dir = f"usr/palm/packages/{app_id}"
+    package_info = json.dumps({"app": app_id, "id": app_id, "loc_name": info["title"],
+                               "package_format_version": 2, "vendor": info["vendor"],
+                               "version": version}, indent=4).encode()
+    dirs += ["usr/palm/packages", pkg_dir]
+    data = tar_gz([(d, None, 0o755) for d in dirs] + [(f"{root}/{n}", b, m) for n, b, m in files]
+                  + [(f"{pkg_dir}/packageinfo.json", package_info, 0o644)])
     installed_kb = sum(len(b) for _, b, _ in files) // 1024
     control = (f"Package: {app_id}\nVersion: {version}\nSection: misc\nPriority: optional\n"
                f"Architecture: arm\nInstalled-Size: {installed_kb}\n"
