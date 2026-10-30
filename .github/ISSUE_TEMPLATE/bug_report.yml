@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in myTV does not work or looks wrong
+labels: [bug]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: TV model and webOS version
+      description: Settings > General > About This TV, for example "OLED55C1, webOS 6.5.3".
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: myTV version
+      description: Shown in the Homebrew Channel, for example "1.0.0".
+    validations:
+      required: true
+  - type: dropdown
+    id: root
+    attributes:
+      label: Is the TV rooted?
+      options: ["Yes", "No", "Not sure"]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Steps to reproduce, what you expected and what you saw. A photo or a short video helps a lot.
+    validations:
+      required: true
