@@ -1,0 +1,13 @@
+{
+  "id": "com.viiees.mytvlauncher",
+  "version": "1.0.0",
+  "vendor": "ViieeS",
+  "type": "native",
+  "main": "launcher",
+  "title": "myTV",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "splashBackground": "splash.png",
+  "requiredMemory": 256,
+  "requiredACG": []
+}

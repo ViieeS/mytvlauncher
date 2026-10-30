@@ -1,0 +1,6 @@
+build/
+build-debug/
+build.log
+deps/
+.DS_Store
+__pycache__/
