@@ -1,0 +1,48 @@
+diff --git a/crt/crt_posix.c b/crt/crt_posix.c
+index 26b9bf8..731c52b 100644
+--- a/crt/crt_posix.c
++++ b/crt/crt_posix.c
+@@ -16,8 +16,9 @@
+ EZAPI crt_thread_create(struct injcode_bearing *br, crt_thread_func_t pfnThreadEntry){
+ 	DBG("pthread_create");
+ 	pthread_t tid;
+-	if(pthread_create(&tid, NULL, pfnThreadEntry, br) < 0){
+-		PERROR("pthread_create");
++	int rc = pthread_create(&tid, NULL, pfnThreadEntry, br);
++	if(rc != 0){   /* returns a positive errno, never -1: a missed failure hangs the daemon's main thread forever */
++		ERR("pthread_create failed: %d", rc);
+ 		return -1;
+ 	}
+ 	pthread_detach(tid);
+diff --git a/ezinject.c b/ezinject.c
+index 6f86a0a..8758624 100644
+--- a/ezinject.c
++++ b/ezinject.c
+@@ -585,7 +585,8 @@ static int libc_init_default(struct ezinj_ctx *ctx){
+ 
+ void invoke_plt_resolvers(){
+ #ifdef EZ_TARGET_POSIX
+-	int fd = open("/tmp/invalid_file_path", 0);
++	// "" fails with ENOENT before any path lookup: warms the PLT entry without touching shared /tmp
++	int fd = open("", O_RDONLY);
+ 	if(fd >= 0) close(fd);
+ 	mmap(0, 0, 0, 0, -1, 0);
+ 	syscall(__NR_getpid);
+diff --git a/os/linux/inject.c b/os/linux/inject.c
+index a306330..aed4ce7 100644
+--- a/os/linux/inject.c
++++ b/os/linux/inject.c
+@@ -39,9 +39,10 @@ static EZAPI _export_pl(struct ezinj_ctx *ctx){
+ 
+ 	INFO("exporting payload to %s", pl_filename);
+ 
+-	unlink(pl_filename);
+-	int fd = open(pl_filename, O_WRONLY | O_SYNC | O_CREAT, (mode_t)0666);
+-	if(fd <= 0){
++	// O_EXCL|O_NOFOLLOW refuse any file or symlink another uid planted at this path; 0600 and
++	// O_CLOEXEC keep the payload (libc addresses, machine code) out of other uids' reach.
++	int fd = open(pl_filename, O_WRONLY | O_SYNC | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, (mode_t)0600);
++	if(fd < 0){
+ 		PERROR("open");
+ 		return -1;
+ 	}
