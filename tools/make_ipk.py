@@ -60,7 +60,7 @@ def main():
 
     info = json.load(open(os.path.join(a.package, "appinfo.json")))
     app_id, version = info["id"], info["version"]
-    root = f"./usr/palm/applications/{app_id}"
+    root = f"usr/palm/applications/{app_id}"
 
     def read(path):
         with open(path, "rb") as f:
@@ -76,7 +76,7 @@ def main():
     files += [(f"wallpapers/{n}", read(os.path.join(wp_dir, n)), 0o644)
               for n in sorted(os.listdir(wp_dir)) if n.endswith(".png")]
 
-    dirs = ["./usr", "./usr/palm", "./usr/palm/applications", root, root + "/lib", root + "/wallpapers"]
+    dirs = ["usr", "usr/palm", "usr/palm/applications", root, root + "/lib", root + "/wallpapers"]
     if a.homehook:
         files += [("homehook/ezinject", read(os.path.join(a.homehook, "ezinject.bin")), 0o755),
                   ("homehook/libmytvhook.so", read(os.path.join(a.homehook, "libmytvhook.so")), 0o755),
@@ -89,7 +89,7 @@ def main():
                f"Maintainer: {info['vendor']}\nDescription: {info['title']}\n"
                f"webOS-Package-Format-Version: 2\nwebOS-Packager-Version: x.y.x\n").encode()
     ipk = ar([("debian-binary", b"2.0\n"),
-              ("control.tar.gz", tar_gz([("./control", control, 0o644)])),
+              ("control.tar.gz", tar_gz([("control", control, 0o644)])),
               ("data.tar.gz", data)])
 
     ipk_name = f"{app_id}_{version}_arm.ipk"
