@@ -15,7 +15,10 @@
 APP_ID=com.viiees.mytvlauncher
 APP=/media/developer/apps/usr/palm/applications/$APP_ID
 HOOK=$APP/homehook
-LINK=/var/lib/webosbrew/init.d/60-mytv-homehook
+# First in line: run-parts runs hooks one by one, and on a cold boot the last input shows until
+# the watcher starts. 1.0.0 used 60-mytv-homehook, after slow hooks such as a debloat sleep.
+LINK=/var/lib/webosbrew/init.d/05-mytv-homehook
+OLD_LINK=/var/lib/webosbrew/init.d/60-mytv-homehook
 # Root-only state and logs live in STATE (0700, root): a shared /tmp path lets any uid feed
 # root a symlink, a FIFO or a fake record. Only ALLOW stays in /tmp: myTV writes it under its own
 # uid, and root just reads and removes it.
@@ -26,6 +29,9 @@ TRIES=$STATE/tries                  # "<daemon> <n>" inject attempts this boot
 LOG=$STATE/watch.log
 BYPASS=$STATE/homehook.bypass       # myTV keeps failing after Home: the hook passes Home to LG
 PRESSED=$STATE/homehook.pressed     # mtime = the last Home press the hook took
+LAST_FG=$STATE/last_fg              # the foreground while awake; on disk so a cold boot sees it too
+LASTINPUT=/var/lib/eim/lastinput
+LASTINPUT_ORIG=$STATE/lastinput.orig  # eim's record while lastinput points at myTV
 ALLOW=/tmp/mytv-allow-lg-home
 LGINPUTHOOK=/home/root/.config/lginputhook/keybinds.json
 LGHOME=com.webos.app.home
@@ -34,9 +40,11 @@ export PATH="/bin:/sbin:/usr/bin:/usr/sbin:$PATH"
 
 log() { echo "$(date +%T) $*" >> "$LOG"; }
 
+[ -L "$OLD_LINK" ] && { ln -sf "$HOOK/watch.sh" "$LINK"; rm -f "$OLD_LINK"; }
+
 # procps ps lists only the caller's terminal by default: pgrep sees every process
 watcher_pid() { pgrep -f "homehook/watch.sh run" | head -n 1; }
-start_watcher() { [ -n "$(watcher_pid)" ] || setsid nohup "$HOOK/watch.sh" run </dev/null >/dev/null 2>&1 & }
+start_watcher() { [ -n "$(watcher_pid)" ] || setsid nohup "$HOOK/watch.sh" run "$1" </dev/null >/dev/null 2>&1 & }
 
 lginputhook_owns_home() { [ -f "$LGINPUTHOOK" ] && grep -q '"773"' "$LGINPUTHOOK"; }
 
@@ -45,11 +53,35 @@ foreground() {
     | sed -n 's/.*"appId":"\([^"]*\)".*/\1/p'
 }
 
-# "Active" while the screen is on; some other word (Suspend/Screen Off/Active Standby) in standby.
-# QuickStart+ keeps the watcher ticking through standby, so a non-Active -> Active edge is the wake.
-power_state() {
-  luna-send -n 1 luna://com.webos.service.tvpower/power/getPowerState '{}' </dev/null 2>/dev/null \
-    | sed -n 's/.*"state"[^"]*"\([^"]*\)".*/\1/p'
+# awake | asleep, or empty while power is changing (apps close during a power off, so the
+# foreground then is not where the user was) or luna fails. "Screen Saver" counts as awake, and so
+# does "processing": "Request Screen Saver": LG's power state can sit in either for hours of use.
+# QuickStart+ keeps the watcher ticking through standby, so an asleep -> awake edge is the wake.
+power_phase() {
+  pwr=$(luna-send -n 1 luna://com.webos.service.tvpower/power/getPowerState '{}' </dev/null 2>/dev/null)
+  echo "$pwr" | grep -qE '"processing"[^"]*"[^"]*(Power|Standby|Screen On|LastInput)' && return
+  case "$(echo "$pwr" | sed -n 's/.*"state"[^"]*"\([^"]*\)".*/\1/p')" in
+    "") ;;
+    *Standby*|Suspend*) echo asleep ;;
+    *) echo awake ;;
+  esac
+}
+
+# bootd opens physicalLastSourceAppId from eim's lastinput after power-on, reading it at that moment
+# on a QuickStart+ wake and on a cold boot alike. Pointed at myTV for the standby, it makes bootd
+# open myTV itself, with no input on screen first. The rest of eim's record stays as it was.
+point_lastinput_at_mytv() {
+  [ -f "$LASTINPUT" ] || return
+  [ -f "$LASTINPUT_ORIG" ] || cp -p "$LASTINPUT" "$LASTINPUT_ORIG"
+  sed -i "s/\"physicalLastSourceAppId\":\"[^\"]*\"/\"physicalLastSourceAppId\":\"$APP_ID\"/" "$LASTINPUT"
+  sync
+}
+
+# Back to eim's record, unless eim has written a newer one meanwhile.
+restore_lastinput() {
+  [ -f "$LASTINPUT_ORIG" ] || return
+  grep -q "\"physicalLastSourceAppId\":\"$APP_ID\"" "$LASTINPUT" && cp -p "$LASTINPUT_ORIG" "$LASTINPUT" && sync
+  rm -f "$LASTINPUT_ORIG"
 }
 
 launch_mytv() {
@@ -112,11 +144,35 @@ run() {
   strikes=0; strike_start=0; last_launch=0; mytv_seen=0
   # a press from before this watcher started (it survives standby in /tmp) is not a new failure
   seen_press=$(stat -c %Y "$PRESSED" 2>/dev/null || echo 0)
-  prev_ps="Active"            # power state last seen; a non-Active -> Active edge is a wake
-  active_fg=""                # the foreground while awake, remembered across standby
+  # Power phase last seen. When QuickStart+ did not hold, power-on is a cold boot: init.d runs well
+  # after the screen is on, so a boot start counts as coming out of standby.
+  prev_phase=awake
+  [ "$1" = boot ] && prev_phase=asleep
+  # a watcher stopped during standby left lastinput pointing at myTV
+  [ "$1" != boot ] && [ "$(power_phase)" = awake ] && restore_lastinput
+  active_fg=$(cat "$LAST_FG" 2>/dev/null)
   while [ -d "$APP" ] && [ ! -f "$DISABLED" ]; do
     now=$(date +%s)
-    ps=$(power_state)
+    phase=$(power_phase)
+    fg=$(foreground)
+
+    # Wake landing, decided from where we were before standby (active_fg). A real input (HDMI etc.)
+    # is left to bootd as usual. From an app or LG Home, bootd is told to open myTV instead, and on
+    # the wake the watcher launches myTV itself if bootd did not (a cold boot that skipped standby).
+    if [ "$phase" = asleep ] && [ "$prev_phase" = awake ]; then
+      [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg" \
+        && { point_lastinput_at_mytv; log "standby: was in $active_fg, bootd opens myTV"; }
+    elif [ "$phase" = awake ] && [ "$prev_phase" = asleep ]; then
+      restore_lastinput
+      [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg" && [ "$fg" != "$APP_ID" ] \
+        && { launch_mytv; log "wake: was in $active_fg, $fg in front -> myTV"; }
+    elif [ "$phase" = awake ] && [ -n "$fg" ] && [ "$fg" != "$active_fg" ]; then
+      active_fg=$fg           # steady awake: remember where we are, for the next wake
+      echo "$fg" > "$LAST_FG"
+    fi
+    [ -n "$phase" ] && prev_phase=$phase
+
+    # After the wake landing: a hung injection can take INJECT_TIMEOUT, and the input shows meanwhile.
     if lginputhook_owns_home; then
       new=lginputhook
     elif inject_all; then
@@ -125,19 +181,6 @@ run() {
       new=poll
     fi
     [ "$new" != "$mode" ] && { log "mode $new"; mode=$new; echo "$mode" > "$MODE"; }
-
-    fg=$(foreground)
-
-    # Wake landing: on the non-Active -> Active edge, decide from where we were before standby
-    # (active_fg), not the input bootd just restored. A real input (HDMI etc.) is left to stand;
-    # an app or LG Home brings myTV forward. A luna power subscription can't do this sooner: it
-    # drops with the system during standby, so it never sees the wake it is meant to catch.
-    if [ "$ps" = Active ] && [ "$prev_ps" != Active ]; then
-      [ ! -f "$DISABLED" ] && [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg" \
-        && { launch_mytv; log "wake: was in $active_fg -> myTV"; }
-    elif [ "$ps" = Active ] && [ -n "$fg" ]; then
-      active_fg=$fg           # steady awake: remember where we are, for the next wake
-    fi
 
     # myTV is up again: whatever made it fail is over, give Home back to it.
     if [ "$fg" = "$APP_ID" ]; then
@@ -171,16 +214,16 @@ run() {
       fi
     fi
     prev_fg=$fg
-    prev_ps=$ps
     sleep 1
   done
   log "stopping: app gone or turned off"
+  restore_lastinput
   [ -d "$APP" ] || rm -f "$LINK"
   rm -f "$MODE"
 }
 
 case "$1" in
-  run) run ;;
+  run) run "$2" ;;
   install)
     mkdir -p "$STATE" /var/lib/webosbrew/init.d
     chmod 700 "$STATE"
@@ -193,6 +236,7 @@ case "$1" in
     touch "$DISABLED"
     rm -f "$LINK"
     pid=$(watcher_pid); [ -n "$pid" ] && kill "$pid"
+    restore_lastinput
     rm -f "$MODE"
     ;;
   status)
@@ -208,7 +252,7 @@ case "$1" in
     [ -f "$DISABLED" ] && exit 0
     [ -n "$(watcher_pid)" ] && exit 0
     rm -f "$TRIES"   # a reboot earns the daemons a fresh set of attempts
-    start_watcher
+    start_watcher boot
     ;;
   *) echo "usage: $0 [install|uninstall|status]" >&2; exit 2 ;;
 esac

@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Power-on after leaving the TV in an app opens myTV straight away, with no HDMI shown first, after
+  standby and after a full power-off alike. Power-on after leaving it on an input still resumes that
+  input.
+
 ## [1.0.0] - 2026-10-30
 
 First public release.
