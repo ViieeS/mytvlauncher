@@ -797,6 +797,8 @@ typedef struct {
     lv_img_dsc_t veil, settings_bg;   /* zoomed 8x: .screen--lower:before and .screen--settings:before */
     lv_img_dsc_t thumb;               /* 360x203 for Settings > Wallpaper (bundled pictures only) */
     bool ready;                       /* src, veil, thumb and tray exist (wp_ready) */
+    bool px;                          /* wp_dsc holds the full-size picture (wp_px): the worker sets
+                                       * it, the UI clears it while another app is in front */
     bool warm;                        /* its glass is rendered for every known size (wp_warm) */
 } wp_t;
 
@@ -1004,11 +1006,19 @@ static void wp_plain_build(void) {
 
 /* `ready` is written by the worker and read by the UI: release/acquire, not just volatile. */
 static bool wp_ready(int i) { return __atomic_load_n(&wps[i].ready, __ATOMIC_ACQUIRE); }
+static bool wp_px(int i) { return __atomic_load_n(&wps[i].px, __ATOMIC_ACQUIRE); }
+
+/* lumen .wp-image .screen scrim: to top #0009 -> 0 at 45 %, to bottom #00000059 -> 0 at 25 % */
+static void wp_scrim(uint8_t *px) {
+    glass_scrim(px, SCR_W, 0, 270, 0x59, 0);
+    glass_scrim(px, SCR_W, 594, SCR_H, 0, 0x99);
+}
 
 /* Glass is kept only for the wallpaper on screen and the one a switch waits for. Any other
  * is warmed up on demand: wp_switch waits for it (a few hundred ms) instead of holding
  * ~12 MB per ticked picture. */
 static int wp_pending = -1;     /* a switch asked for before its wallpaper was warm */
+static bool app_away;           /* another app is in front: no polling, no spare pictures */
 static bool glass_wanted(int i) { return i == wp_cur || i == wp_pending; }
 
 static void wp_prepare(int i) {
@@ -1018,18 +1028,43 @@ static void wp_prepare(int i) {
     glass_src_build(&w->src, px, SCR_W, SCR_H);
     if (i < WP_COUNT) {
         thumb_from(&w->thumb, px);
-        /* lumen .wp-image .screen scrim: to top #0009 -> 0 at 45 %, to bottom #00000059 -> 0 at 25 % */
-        glass_scrim(px, SCR_W, 0, 270, 0x59, 0);
-        glass_scrim(px, SCR_W, 594, SCR_H, 0, 0x99);
+        wp_scrim(px);
     }
     small_from_src(&w->veil, &w->src, 0x42, 0x10131c, 255);
     small_from_src(&w->settings_bg, &w->src, 0x85, 0x181c28, 0xe6);   /* .screen--settings:before 1.1.4 */
     glass_get(0, G_TRAY, tray_w_want, TILE_H + 48);
+    __atomic_store_n(&w->px, true, __ATOMIC_RELEASE);
     __atomic_store_n(&w->ready, true, __ATOMIC_RELEASE);
 }
 
-/* One wallpaper into our own BGRA buffer, decoded once: a rotation never decodes (a 1080p PNG
- * is ~300 ms) and the glass/scrim passes work on the pixels. lodepng directly, because LVGL's
+static void wp_decode(int i);
+
+/* The full-size picture again after wp_px_shed (worker). src, thumb and veil were kept. */
+static void wp_redecode(int i) {
+    wp_decode(i);
+    if (!wp_dsc[i].data) return;
+    if (i < WP_COUNT) wp_scrim((uint8_t *) wp_dsc[i].data);
+    __atomic_store_n(&wps[i].px, true, __ATOMIC_RELEASE);
+}
+
+/* UI thread, while another app is in front: drop the full-size pictures not on screen, 8 MB
+ * each. The TV closes the biggest background app first when a heavy one starts, and myTV
+ * coming back from scratch is slower than the worker decoding them again on return. */
+static void wp_px_shed(void) {
+    int n = 0;
+    for (int i = 0; i < WP_N; i++)
+        if (i != wp_cur && i != wp_pending && wp_px(i)) {
+            __atomic_store_n(&wps[i].px, false, __ATOMIC_RELEASE);
+            lv_img_cache_invalidate_src(&wp_dsc[i]);      /* as in glass_shed */
+            free((void *) wp_dsc[i].data);
+            wp_dsc[i].data = NULL;
+            n++;
+        }
+    if (n) LOG("away: %d wallpaper pictures freed\n", n);
+}
+
+/* One wallpaper into our own BGRA buffer, kept while myTV is in front: a rotation never decodes
+ * (a 1080p PNG is ~300 ms) and the glass/scrim passes work on the pixels. lodepng directly, because LVGL's
  * decoder and image cache are not thread-safe and this also runs on the worker. */
 static void wp_decode(int i) {
     if (i == WP_PLAIN) { wp_plain_build(); return; }
@@ -1080,6 +1115,17 @@ static void *glass_worker(void *arg) {
             wp_prepare(next);
             failed[next] = !wp_ready(next);
             main_wake();                                /* a pending switch may go now */
+            continue;
+        }
+        bool away = __atomic_load_n(&app_away, __ATOMIC_ACQUIRE);
+        for (int i = 0; i < WP_N && next < 0; i++)
+            if (wp_ready(i) && !wp_px(i) && !failed[i] && (glass_wanted(i) || (i < WP_COUNT && !away))) next = i;
+        if (next >= 0) {
+            uint32_t t0 = SDL_GetTicks();
+            wp_redecode(next);
+            LOG("wallpaper %d decoded again in %u ms\n", next, SDL_GetTicks() - t0);
+            failed[next] = !wp_px(next);
+            main_wake();
             continue;
         }
         int g = -1;
@@ -1165,7 +1211,7 @@ static void fade_done(lv_anim_t *a) {
 /* Cross-fade every wallpaper-dependent layer to wallpaper `next`. */
 static void wp_switch(int next) {
     if (next == wp_cur) return;
-    if (!wp_ready(next) || !wp_warm(next) || lv_anim_get(layers, fade_exec)) {   /* the main loop retries it */
+    if (!wp_ready(next) || !wp_px(next) || !wp_warm(next) || lv_anim_get(layers, fade_exec)) {   /* the main loop retries it */
         wp_pending = next;
         worker_wake();
         return;
@@ -1215,7 +1261,7 @@ static int wp_next_take(void) {
 /* Main loop, idle only. A cache hit costs a lookup, so it may run on every idle pass; the
  * LRU may have evicted the texture since the last one. */
 static void wp_upload(int i) {
-    if (!wp_ready(i)) return;
+    if (!wp_ready(i) || !wp_px(i)) return;
     lv_draw_ctx_t *dc = lv_disp_get_default()->driver->draw_ctx;
     uint32_t t0 = SDL_GetTicks();
     bool up = lv_draw_sdl_img_warm(dc, &wp_dsc[i]);
@@ -1231,7 +1277,6 @@ static void wp_upload_ahead(void) {
 /* lumen "Change wallpaper automatically": only with Shuffle, every 15/30/60 min. */
 static bool ui_busy(void);
 static lv_timer_t *wp_timer;
-static bool app_away;
 static void wp_rotate_cb(lv_timer_t *t) {
     (void) t;
     if (!ui_busy() && !prefs.wp_plain && !app_away) wp_switch(wp_next_take());   /* no crossfade nobody sees */
@@ -1955,7 +2000,6 @@ static void ctx_confirm_reset(void) {
  * poll after 2.5 s). Feeds the dots over the tiles and the Recent Apps switcher. */
 static char running_ids[32][96];
 static int nrunning;
-static bool app_away;           /* another app is in front: no polling */
 
 static bool app_running_id(const char *id) {
     for (int i = 0; i < nrunning; i++) if (!strcmp(running_ids[i], id)) return true;
@@ -2502,7 +2546,7 @@ static void saver_start(void) {
         snprintf(env.weather, sizeof(env.weather), "%s", wx_text);
         pthread_mutex_unlock(&wx_mtx);
     }
-    for (int i = 0; i < WP_COUNT; i++) if (wp_ready(i)) env.photos[env.nphotos++] = &wp_dsc[i];
+    for (int i = 0; i < WP_COUNT; i++) if (wp_ready(i) && wp_px(i)) env.photos[env.nphotos++] = &wp_dsc[i];
     lv_timer_set_repeat_count(lv_timer_create(saver_cover_cb, 600, NULL), 1);   /* after the .5 s fade-in */
     if (prefs.ss_type == 2) { standby_open(&env, prefs.sb_face ? prefs.sb_face - 1 : prefs.sb_last, prefs.sb_color); return; }
     photos_open(&env);
@@ -4361,6 +4405,17 @@ static void cmd_cb(lv_timer_t *t) {
 
 /* ================================================================ main */
 
+/* myTV is in front again after another app or an input. */
+static void back_in_front(void) {
+    ui_rest();     /* lumen: coming back to the launcher = rest state, dock shown */
+    last_input = SDL_GetTicks();
+    rq_send(RQ_TIMEFMT, false, "luna://com.webos.service.systemservice/getPreferences", "{\"keys\":[\"timeFormat\"]}", NULL);
+    if (app_away && !prefs.wp_plain && prefs.wp_new) wp_switch(wp_next_take());
+    __atomic_store_n(&app_away, false, __ATOMIC_RELEASE);
+    worker_wake();        /* the pictures wp_px_shed dropped */
+    running_poll(NULL);
+}
+
 int main(void) {
     SDL_SetMainReady();
 #ifdef MYTV_DEBUG
@@ -4434,16 +4489,11 @@ int main(void) {
             if (e.type == SDL_QUIT) running = false;
             else if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST || e.window.event == SDL_WINDOWEVENT_HIDDEN)) {
                 LOG("window event %d: away\n", e.window.event);
-                app_away = true;
+                __atomic_store_n(&app_away, true, __ATOMIC_RELEASE);
                 ok_down = false;      /* its key-up goes to whoever took focus */
             } else if (e.type == SDL_WINDOWEVENT && (e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED || e.window.event == SDL_WINDOWEVENT_SHOWN)) {
                 LOG("window event %d: back to rest\n", e.window.event);
-                ui_rest();     /* lumen: coming back to the launcher = rest state, dock shown */
-                last_input = SDL_GetTicks();
-                rq_send(RQ_TIMEFMT, false, "luna://com.webos.service.systemservice/getPreferences", "{\"keys\":[\"timeFormat\"]}", NULL);
-                if (app_away && !prefs.wp_plain && prefs.wp_new) wp_switch(wp_next_take());
-                app_away = false;
-                running_poll(NULL);
+                back_in_front();
             } else if (e.type == SDL_KEYDOWN) {
                 last_input = SDL_GetTicks();
                 SDL_Keycode s = e.key.keysym.sym;
@@ -4494,11 +4544,16 @@ int main(void) {
                 else pointer_focus(e.button.x, e.button.y, true);
             }
         }
-        if (__atomic_exchange_n(&relaunched, 0, __ATOMIC_ACQUIRE) && !app_away) {
-            LOG("relaunched in front: home\n");
+        if (__atomic_exchange_n(&relaunched, 0, __ATOMIC_ACQUIRE)) {
             ok_down = false;
-            if (saver_active()) handle(K_BACK);
-            ui_rest();
+            /* A launch raises us, but after a wake where bootd showed an input first no focus
+             * event follows: without this the launcher would stay "away" in front. */
+            if (app_away) { LOG("relaunched from away: back to rest\n"); back_in_front(); }
+            else {
+                LOG("relaunched in front: home\n");
+                if (saver_active()) handle(K_BACK);
+                ui_rest();
+            }
         }
         if (ok_down && !ok_long && SDL_GetTicks() - ok_down_at >= LONG_PRESS_MS) { ok_long = true; handle(K_HOLD); }
         /* "After idle": the dock slides away after 8 s without input on the home screen */
@@ -4512,6 +4567,8 @@ int main(void) {
             saver_start();
         }
         if (wp_pending >= 0 && wp_warm(wp_pending) && !lv_anim_get(layers, fade_exec)) wp_switch(wp_pending);
+        /* nothing may still draw a picture it drops: no cross-fade, no photo saver */
+        if (app_away && !saver_active() && !lv_anim_get(layers, fade_exec)) wp_px_shed();
         /* Textures needed soon, uploaded while nothing moves (the saver's faces always move, so
          * it takes one small piece per pass instead) */
         if (saver_active()) {

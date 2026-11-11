@@ -10,7 +10,12 @@ All notable changes to this project are documented here. The format follows
 
 - Power-on after leaving the TV in an app opens myTV straight away, with no HDMI shown first, after
   standby and after a full power-off alike. Power-on after leaving it on an input still resumes that
-  input.
+  input. This also holds across the TV's nightly restart in standby.
+- myTV no longer stays in its background state when it comes back after power-on.
+
+### Changed
+
+- While another app is in front, myTV frees the wallpapers that are not on screen, about 34 MB.
 
 ## [1.0.0] - 2026-10-30
 
