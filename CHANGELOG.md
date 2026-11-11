@@ -17,6 +17,11 @@ All notable changes to this project are documented here. The format follows
 
 - While another app is in front, myTV frees the wallpapers that are not on screen, about 34 MB.
 
+### Removed
+
+- The Recent row under the home rows. It repeated apps already on screen. Recent apps stay in the
+  switcher: hold OK on a tile, then Recent Apps.
+
 ## [1.0.0] - 2026-10-30
 
 First public release.

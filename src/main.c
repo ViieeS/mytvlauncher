@@ -62,7 +62,6 @@ static const int FOCUS_ZOOMS[3] = { 277, 297, 323 };   /* focusStrength subtle 1
 #define LONG_PRESS_MS 600         /* rt.longPressMs */
 #define KEY_REPEAT_MS 90
 #define TOAST_MS 2200
-#define RECENT_MAX 8
 #define PANEL_TILE_W 200          /* .panel: tile 200x120, radius 24, gap 24, 3 per row */
 #define PANEL_TILE_H 120
 #define PANEL_TILE_R 24
@@ -106,7 +105,6 @@ static int order[MAX_APPS], norder;          /* every app, user order */
 static bool hidden[MAX_APPS];                /* removed from Home (Settings > Apps adds back) */
 static int folder_of[MAX_APPS];              /* -1 or folder index */
 static int folder_items[NFOLDERS][MAX_APPS], folder_n[NFOLDERS];
-static int recent[RECENT_MAX], nrecent;
 static int clock_fmt;                        /* 0 auto (the TV's own setting), 1 12h, 2 24h */
 static bool sys_12h;
 static char src_hidden[16][48];              /* input appIds hidden in Settings > Sources */
@@ -155,7 +153,6 @@ static void state_save(void) {
     for (int i = 0; i < napps; i++) if (hidden[i]) fprintf(f, "hide %s\n", apps[i].id);
     for (int k = 0; k < NFOLDERS; k++)
         for (int i = 0; i < folder_n[k]; i++) fprintf(f, "folder %d %s\n", k, apps[folder_items[k][i]].id);
-    for (int i = 0; i < nrecent; i++) fprintf(f, "recent %s\n", apps[recent[i]].id);
     for (int i = 0; i < nsrc_hidden; i++) fprintf(f, "srchide %s\n", src_hidden[i]);
     fprintf(f, "clock %d\nwpplain %d\npicks %d\nwpnew %d\nwpdim %d\nwpauto %d\nweather %d\nampm %d\ndock %d\n",
             clock_fmt, prefs.wp_plain, prefs.picks, prefs.wp_new, prefs.wp_dim, prefs.wp_auto_min, prefs.show_weather,
@@ -241,7 +238,7 @@ static void state_load(void) {
     /* the app list can be reloaded (after an uninstall): indices change, so start clean */
     memset(hidden, 0, sizeof(hidden));
     memset(folder_n, 0, sizeof(folder_n));
-    nrecent = nsrc_hidden = 0;
+    nsrc_hidden = 0;
     for (int i = 0; i < napps; i++) folder_of[i] = -1;
     bool placed[MAX_APPS] = { 0 };
     norder = 0;
@@ -262,8 +259,7 @@ static void state_load(void) {
                 int k = atoi(arg); char *id = strchr(arg, ' ');
                 int a = id ? app_by_id(id + 1) : -1;
                 if (a >= 0 && k >= 0 && k < NFOLDERS && folder_of[a] < 0) { folder_of[a] = k; folder_items[k][folder_n[k]++] = a; }
-            } else if (!strcmp(line, "recent")) { int a = app_by_id(arg); if (a >= 0 && nrecent < RECENT_MAX) recent[nrecent++] = a; }
-            else if (!strcmp(line, "srchide") && nsrc_hidden < 16) snprintf(src_hidden[nsrc_hidden++], 48, "%s", arg);
+            } else if (!strcmp(line, "srchide") && nsrc_hidden < 16) snprintf(src_hidden[nsrc_hidden++], 48, "%s", arg);
         }
         fclose(f);
     }
@@ -1549,7 +1545,7 @@ typedef struct {
     lv_obj_t *cont, *track, *label;
     ref_t it[MAX_APPS];
     lv_obj_t *obj[MAX_APPS], *dot[MAX_APPS];
-    int n, col, kind;          /* kind: 0 Apps (tray), 1 More apps, 2 Recent */
+    int n, col, kind;          /* kind: 0 Apps (tray), 1 More apps */
     int track_x;
     bool shown;
 } row_t;
@@ -1564,7 +1560,10 @@ static struct {
     bool lower;
 } ui;
 
-static row_t rows[3];
+/* No Recent row as in lumen: it repeated apps already on screen. tvOS keeps recents in the
+ * app switcher, and so does myTV (hold OK > Recent Apps). */
+#define MAX_ROWS 2
+static row_t rows[MAX_ROWS];
 static int nrows;
 static lv_obj_t *scr, *rows_cont, *status_cont, *status_wx, *status_wx_icon, *status_wx_text, *topbar_lbl[2], *pill_icon[2];
 static lv_obj_t *dockhint, *dockdim, *movehint, *toast, *overlay, *settings_layer;
@@ -1722,17 +1721,15 @@ static void rows_layout(bool animate);
 
 /* Rebuild the rows from the model (after a load, a remove, a folder change, a launch). */
 static void rows_build(void) {
-    static ref_t U[MAX_APPS + NFOLDERS], rec[RECENT_MAX];
-    int n = home_list(U), nr = 0;
-    for (int i = 0; i < nrecent; i++) rec[nr++] = (ref_t) { IT_APP, recent[i] };
+    static ref_t U[MAX_APPS + NFOLDERS];
+    int n = home_list(U);
     focus_obj(NULL);
     labelled = NULL;
     nrows = 0;
     int per = prefs.apps_row;
     row_fill(nrows++, 0, U, n < per ? n : per);
     if (n > per) row_fill(nrows++, 1, U + per, n - per);
-    if (nr) row_fill(nrows++, 2, rec, nr);
-    for (int r = 0; r < 3; r++) {
+    for (int r = 0; r < MAX_ROWS; r++) {
         if (r < nrows) lv_obj_clear_flag(rows[r].cont, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(rows[r].cont, LV_OBJ_FLAG_HIDDEN);
     }
@@ -1750,9 +1747,8 @@ static lv_obj_t *cur_tile(void) {
 static void rows_layout(bool animate) {
     bool in_rows = ui.zone == Z_ROWS || ui.zone == Z_CTX || ui.zone == Z_FOLDER;
     bool lower = in_rows && ui.row >= 1;
-    /* lumen-performance.css: rows move by translate3d in 160 ms (-300 lower, +1300 hidden). lumen
-     * keeps -300 for every lower row, which leaves the Recent row off-screen; we follow the focus. */
-    int y = ROWS_TOP - (lower ? LOWER_SHIFT + (ui.row - 1) * ROW_PITCH : 0);
+    /* lumen-performance.css: rows move by translate3d in 160 ms (-300 lower, +1300 hidden) */
+    int y = ROWS_TOP - (lower ? LOWER_SHIFT : 0);
     if (ui.dock_hidden) y += 1300;
     anim(rows_cont, ax_y, lv_obj_get_y(rows_cont), y, animate ? 160 : 0, path_lumen);
     bool veil = lower && !ui.dock_hidden;            /* .lowerveil is display:none with the dock away */
@@ -3526,19 +3522,9 @@ static void motion_apply(void) {
 
 /* ================================================================ model edits */
 
-static void recent_push(int a) {
-    int n = 0, out[RECENT_MAX];
-    out[n++] = a;
-    for (int i = 0; i < nrecent && n < RECENT_MAX; i++) if (recent[i] != a) out[n++] = recent[i];
-    memcpy(recent, out, sizeof(int) * n);
-    nrecent = n;
-    state_save();
-}
-
 static void launch_ref(ref_t r) {
     if (r.kind == IT_APP) {
         launch_app_id(apps[r.ref].id);
-        recent_push(r.ref);
     } else if (r.kind == IT_INPUT) {
         launch_app_id(inputs[r.ref].app_id);
     }
@@ -3709,7 +3695,7 @@ static void move_step(int dir) {
     rows_build();
     for (int ri = 0; ri < nrows; ri++)
         for (int c = 0; c < rows[ri].n; c++)
-            if (rows[ri].kind != 2 && rows[ri].it[c].kind == IT_APP && rows[ri].it[c].ref == r.ref) { ui.row = ri; rows[ri].col = c; }
+            if (rows[ri].it[c].kind == IT_APP && rows[ri].it[c].ref == r.ref) { ui.row = ri; rows[ri].col = c; }
 }
 
 static void rows_activate(void) {
@@ -3755,7 +3741,7 @@ static void handle(int k) {
                 if (ui.row >= nrows - 1) { if (prefs.dock_hide & 1) ui.dock_hidden = true; }   /* "Down arrow" / "Both" */
                 else { rows[ui.row + 1].col = clampi(R->col, 0, rows[ui.row + 1].n - 1); ui.row++; }
             } else if (k == K_OK) rows_activate();
-            else if (k == K_HOLD && R->kind != 2 && R->n && R->it[R->col].kind == IT_APP) open_ctx(false);
+            else if (k == K_HOLD && R->n && R->it[R->col].kind == IT_APP) open_ctx(false);
             break;
         }
         case Z_TOP:
@@ -3829,7 +3815,7 @@ static void pointer_focus(int x, int y, bool click) {
     switch (z) {
         case Z_ROWS:
             /* while moving, focus stays on the carried app: hovering another tile drags it there */
-            if (ui.moving) { if (ui.zone == Z_ROWS && rows[a].kind != 2) move_step((a - ui.row) * prefs.apps_row + b - rows[ui.row].col); }
+            if (ui.moving) { if (ui.zone == Z_ROWS) move_step((a - ui.row) * prefs.apps_row + b - rows[ui.row].col); }
             else if (ui.zone == Z_ROWS || ui.zone == Z_TOP) { outside_changed = rows[a].col != b; ui.zone = Z_ROWS; ui.row = a; rows[a].col = b; }
             break;
         case Z_TOP: if (ui.zone == Z_ROWS || ui.zone == Z_TOP) { ui.zone = Z_TOP; ui.top = b; } break;
@@ -4265,10 +4251,10 @@ static void build_ui(void) {
 
     /* rows: absolute containers sized to their content; y is animated (lower / dock hide).
      * Margins: the tray image's baked shadow (~90px), a focused tile's zoom + lift + shadow. */
-    rows_cont = group(scr, 0, ROWS_TOP, SCR_W, 3 * ROW_PITCH, 120);
+    rows_cont = group(scr, 0, ROWS_TOP, SCR_W, MAX_ROWS * ROW_PITCH, 120);
     lv_obj_t *tray_holder = group(rows_cont, 0, 0, SCR_W, TILE_H, 120);
     dual_create(L_TRAY, tray_holder);
-    for (int r = 0; r < 3; r++) {
+    for (int r = 0; r < MAX_ROWS; r++) {
         rows[r].cont = group(rows_cont, 0, r * ROW_PITCH, SCR_W, ROW_PITCH, 80);
         rows[r].track = group(rows[r].cont, 0, 0, 1, ROW_PITCH, 80);
         rows[r].shown = r == 0;
