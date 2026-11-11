@@ -60,10 +60,11 @@ foreground() {
 power_phase() {
   pwr=$(luna-send -n 1 luna://com.webos.service.tvpower/power/getPowerState '{}' </dev/null 2>/dev/null)
   echo "$pwr" | grep -qE '"processing"[^"]*"[^"]*(Power|Standby|Screen On|LastInput)' && return
+  # Any other state is a passage: the nightly QuickStart+ reboot goes through one, and taking it
+  # for a wake put lastinput back before the reboot.
   case "$(echo "$pwr" | sed -n 's/.*"state"[^"]*"\([^"]*\)".*/\1/p')" in
-    "") ;;
+    Active|"Screen Saver"|"Screen Off") echo awake ;;
     *Standby*|Suspend*) echo asleep ;;
-    *) echo awake ;;
   esac
 }
 
