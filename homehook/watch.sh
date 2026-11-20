@@ -142,6 +142,16 @@ inject_all() {
     pid=$(pidof "$d" | awk '{print $1}')
     [ -n "$pid" ] || { log "$d not running"; ok=1; continue; }
     elog=$STATE/inject-$d.log
+    # A package update replaces libmytvhook.so, but the daemon keeps the old one mapped until it
+    # restarts (the library cannot be unloaded). A mapped inode other than the file's = stale:
+    # systemd restarts the daemon clean and the next pass injects the new library.
+    mapped=$(awk '/libmytvhook\.so/ {print $5; exit}' "/proc/$pid/maps" 2>/dev/null)
+    if [ -n "$mapped" ] && [ "$mapped" != "$(stat -c %i "$HOOK/libmytvhook.so" 2>/dev/null)" ]; then
+      log "$d ($pid) runs an older hook, restarting it"
+      kill -9 "$pid" 2>/dev/null
+      ok=1
+      continue
+    fi
     # Hooked = the library is in this daemon's map (a pid list on disk outlives a reboot that reuses
     # the pid) and its last injection succeeded (a failed one stays mapped too: the library persists).
     grep -q libmytvhook.so "/proc/$pid/maps" 2>/dev/null && grep -q "lib_main returned: 0" "$elog" 2>/dev/null && continue
