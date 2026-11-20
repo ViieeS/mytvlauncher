@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows
   standby and after a full power-off alike. Power-on after leaving it on an input still resumes that
   input. This also holds across the TV's nightly restart in standby.
 - myTV no longer stays in its background state when it comes back after power-on.
+- Closing an app, for example with Exit app in the browser, returns to myTV instead of LG Home.
 
 ### Changed
 

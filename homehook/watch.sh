@@ -97,6 +97,34 @@ is_source() {
   esac
 }
 
+# When an app closes (e.g. "Exit app"), the foreground goes empty and SAM's last_input_handler
+# opens LG Home about a second later. myTV launched in that gap is in front first, and Home is
+# not opened at all. Polling would only catch Home after it is on screen, so this subscribes.
+# Runs beside the main loop, in the watcher's process group; luna-send is restarted if it dies.
+watch_app_close() {
+  while [ -d "$APP" ] && [ ! -f "$DISABLED" ]; do
+    prev=""
+    luna-send -i luna://com.webos.applicationManager/getForegroundAppInfo '{"subscribe":true}' \
+      </dev/null 2>/dev/null | while read -r line; do
+      fg=$(echo "$line" | sed -n 's/.*"appId":"\([^"]*\)".*/\1/p')
+      if [ -z "$fg" ] && [ -n "$prev" ] && [ "$prev" != "$APP_ID" ] && [ "$prev" != "$LGHOME" ] \
+        && ! is_source "$prev" && [ ! -f "$DISABLED" ] && [ ! -f "$BYPASS" ] \
+        && grep -qE '^(hook|poll)$' "$MODE" 2>/dev/null && [ "$(power_phase)" = awake ]; then
+        launch_mytv
+        log "closed: $prev -> myTV"
+      fi
+      echo "$line" | grep -q '"appId"' && prev=$fg
+    done
+    sleep 2
+  done
+}
+
+# The subscriber blocks in luna-send, so its loop never sees the off switch: kill both.
+stop_app_close() {
+  [ -n "$1" ] && kill "$1" 2>/dev/null
+  pkill -f 'getForegroundAppInfo .."subscribe":true'
+}
+
 MAX_TRIES=2       # per daemon per boot: after this, stay in poll, never ptrace again
 INJECT_TIMEOUT=20 # ezinject fails fast; a longer run means it hung with the daemon stopped
                   # busybox timeout wants -t SECS, not a bare number (else it runs "20" as the program)
@@ -152,6 +180,8 @@ run() {
   # a watcher stopped during standby left lastinput pointing at myTV
   [ "$1" != boot ] && [ "$(power_phase)" = awake ] && restore_lastinput
   active_fg=$(cat "$LAST_FG" 2>/dev/null)
+  watch_app_close &
+  close_pid=$!
   while [ -d "$APP" ] && [ ! -f "$DISABLED" ]; do
     now=$(date +%s)
     phase=$(power_phase)
@@ -205,8 +235,9 @@ run() {
       fi
     fi
 
-    # Poll mode: the hook is not in place, so catch LG Home after the fact.
-    if [ "$mode" = poll ] && [ "$fg" = "$LGHOME" ] && [ "$prev_fg" != "$LGHOME" ] && [ ! -f "$BYPASS" ]; then
+    # Catch LG Home after the fact. Poll mode has no hook at all; in hook mode LG Home still opens
+    # without a Home press, e.g. when an app's "Exit app" closes it.
+    if { [ "$mode" = poll ] || [ "$mode" = hook ]; } && [ "$fg" = "$LGHOME" ] && [ "$prev_fg" != "$LGHOME" ] && [ ! -f "$BYPASS" ]; then
       if [ -f "$ALLOW" ] && [ $((now - $(stat -c %Y "$ALLOW"))) -lt 30 ]; then
         rm -f "$ALLOW"
       elif [ $((now - last_launch)) -ge 3 ]; then
@@ -218,6 +249,7 @@ run() {
     sleep 1
   done
   log "stopping: app gone or turned off"
+  stop_app_close "$close_pid"
   restore_lastinput
   [ -d "$APP" ] || rm -f "$LINK"
   rm -f "$MODE"
@@ -236,7 +268,8 @@ case "$1" in
     mkdir -p "$STATE"
     touch "$DISABLED"
     rm -f "$LINK"
-    pid=$(watcher_pid); [ -n "$pid" ] && kill "$pid"
+    pkill -f "homehook/watch.sh run"   # the main loop and its app-close subscriber
+    stop_app_close
     restore_lastinput
     rm -f "$MODE"
     ;;
