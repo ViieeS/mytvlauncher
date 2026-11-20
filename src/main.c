@@ -288,7 +288,7 @@ static bool src_is_hidden(const char *app_id) {
 /* ================================================================ Luna */
 
 typedef enum { RQ_APPS, RQ_PIC, RQ_SND, RQ_SLEEP, RQ_INPUTS,
-               RQ_TIMEFMT, RQ_RUNNING, RQ_UNINSTALL, RQ_ACT, RQ_ICONS, RQ_HOMEHOOK, RQ_N } rq_t;
+               RQ_TIMEFMT, RQ_RUNNING, RQ_UNINSTALL, RQ_ACT, RQ_ICONS, RQ_HOMEHOOK, RQ_KEYS, RQ_N } rq_t;
 
 typedef struct { rq_t kind; bool root; char *json; } reply_t;
 static pthread_mutex_t rq_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -317,12 +317,12 @@ static bool rq_push(rq_t k, bool root, LSMessage *m) {
     static bool cbr_##k(LSHandle *s, LSMessage *m, void *c) { (void) s; (void) c; return rq_push(k, true, m); }
 RQ_CB(RQ_APPS) RQ_CB(RQ_PIC) RQ_CB(RQ_SND) RQ_CB(RQ_SLEEP)
 RQ_CB(RQ_INPUTS) RQ_CB(RQ_TIMEFMT) RQ_CB(RQ_RUNNING) RQ_CB(RQ_UNINSTALL) RQ_CB(RQ_ACT) RQ_CB(RQ_ICONS)
-RQ_CB(RQ_HOMEHOOK)
+RQ_CB(RQ_HOMEHOOK) RQ_CB(RQ_KEYS)
 static const LSFilterFunc rq_cbs[RQ_N][2] = {
     { cb_RQ_APPS, cbr_RQ_APPS }, { cb_RQ_PIC, cbr_RQ_PIC }, { cb_RQ_SND, cbr_RQ_SND },
     { cb_RQ_SLEEP, cbr_RQ_SLEEP }, { cb_RQ_INPUTS, cbr_RQ_INPUTS }, { cb_RQ_TIMEFMT, cbr_RQ_TIMEFMT },
     { cb_RQ_RUNNING, cbr_RQ_RUNNING }, { cb_RQ_UNINSTALL, cbr_RQ_UNINSTALL }, { cb_RQ_ACT, cbr_RQ_ACT },
-    { cb_RQ_ICONS, cbr_RQ_ICONS }, { cb_RQ_HOMEHOOK, cbr_RQ_HOMEHOOK },
+    { cb_RQ_ICONS, cbr_RQ_ICONS }, { cb_RQ_HOMEHOOK, cbr_RQ_HOMEHOOK }, { cb_RQ_KEYS, cbr_RQ_KEYS },
 };
 static bool rq_raw[RQ_N];     /* a shell command through the Homebrew exec, not a luna call */
 
@@ -368,6 +368,23 @@ static void rq_exec(rq_t k, const char *cmd) {
 static char homehook_state[16];
 static void homehook_query(void) { rq_exec(RQ_HOMEHOOK, HOMEHOOK " status"); }
 static bool homehook_on(void) { return !strcmp(homehook_state, "hook") || !strcmp(homehook_state, "poll"); }
+
+/* Remote buttons bound to apps, taken by the hook (so only in hook mode). The root file
+ * (watch.sh learn / bind / unbind / binds) is the only copy: each command prints the whole table
+ * back and keys_loaded() replaces ours with it. */
+static struct { int code; char id[96]; } keybinds[16];
+static int nkeybinds;
+static enum { KP_NONE, KP_LEARN, KP_BIND, KP_UNBIND } key_phase;
+static char key_app_id[96], key_app_title[64];
+static void keys_exec(const char *args) {
+    char cmd[300];
+    snprintf(cmd, sizeof(cmd), HOMEHOOK " %s", args);
+    rq_exec(RQ_KEYS, cmd);
+}
+static bool key_bound(const char *id) {
+    for (int i = 0; i < nkeybinds; i++) if (!strcmp(keybinds[i].id, id)) return true;
+    return false;
+}
 
 static void launch_app_id(const char *id) {
     char p[200];
@@ -1934,11 +1951,12 @@ static void open_folder(int k) {
 /* lumen 1.1.4 long-press menu on an app tile in the Apps / More apps rows: Recent Apps, Move,
  * Uninstall App (third-party apps only, OK twice), Remove from Home, Add to a folder. Inside an
  * open folder it offers Take out of Folder. */
-enum { CI_RECENT, CI_MOVE, CI_UNINSTALL, CI_REMOVE, CI_ADD0, CI_ADD1, CI_ADD2, CI_TAKEOUT };
+enum { CI_RECENT, CI_MOVE, CI_UNINSTALL, CI_REMOVE, CI_ADD0, CI_ADD1, CI_ADD2, CI_TAKEOUT, CI_BIND };
 static const char *CI_LABELS[] = { "Recent Apps", "Move", "Uninstall App", "Remove from Home",
-                                   "Add to Games", "Add to Tools", "Add to Media", "Take out of Folder" };
-static int ctx_n, ctx_ids[7];
-static lv_obj_t *ctx_rows[7], *ctx_labels[7];
+                                   "Add to Games", "Add to Tools", "Add to Media", "Take out of Folder",
+                                   "Assign Remote Button" };
+static int ctx_n, ctx_ids[8];
+static lv_obj_t *ctx_rows[8], *ctx_labels[8];
 static bool ctx_confirm;
 
 /* .panel--menu: 16px padding, 76px rows 6px apart */
@@ -1960,6 +1978,7 @@ static void open_ctx(bool from_folder) {
     else {
         ctx_ids[ctx_n++] = CI_RECENT;
         ctx_ids[ctx_n++] = CI_MOVE;
+        if (!strcmp(homehook_state, "hook")) ctx_ids[ctx_n++] = CI_BIND;
         if (app_removable(apps[r.ref].id)) ctx_ids[ctx_n++] = CI_UNINSTALL;
         for (int c = CI_REMOVE; c <= CI_ADD2; c++) ctx_ids[ctx_n++] = c;
     }
@@ -1972,7 +1991,8 @@ static void open_ctx(bool from_folder) {
         lv_obj_set_style_radius(row, 38, 0);
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, TAG(Z_CTX, 0, i));
-        lv_obj_t *l = label(row, &geist_28m, C_TEXT, CI_LABELS[ctx_ids[i]]);
+        bool unbind = ctx_ids[i] == CI_BIND && key_bound(apps[r.ref].id);
+        lv_obj_t *l = label(row, &geist_28m, C_TEXT, unbind ? "Remove Remote Button" : CI_LABELS[ctx_ids[i]]);
         lv_obj_set_style_text_color(l, lv_color_hex(0x111111), LV_STATE_FOCUSED);
         lv_obj_align(l, LV_ALIGN_LEFT_MID, 24, 0);
         ctx_rows[i] = row;
@@ -3666,6 +3686,24 @@ static void ctx_activate(int i) {
         case CI_RECENT: open_switcher(); return;
         case CI_MOVE: ui.moving = true; lv_obj_clear_flag(movehint, LV_OBJ_FLAG_HIDDEN); return;
         case CI_UNINSTALL: uninstall_app(r.ref); return;
+        case CI_BIND: {
+            if (key_phase != KP_NONE) { show_toast("Busy with another button, try again", true); return; }
+            snprintf(key_app_id, sizeof(key_app_id), "%s", apps[r.ref].id);
+            snprintf(key_app_title, sizeof(key_app_title), "%s", apps[r.ref].title);
+            char t[128];
+            if (key_bound(key_app_id)) {
+                char a[140];
+                snprintf(a, sizeof(a), "unbind %s", key_app_id);
+                key_phase = KP_UNBIND;
+                keys_exec(a);
+                return;
+            }
+            key_phase = KP_LEARN;
+            keys_exec("learn");
+            snprintf(t, sizeof(t), "Press a remote button to open %s", key_app_title);
+            show_toast(t, false);
+            return;
+        }
         case CI_REMOVE: hidden[r.ref] = true; break;
         default: folder_add(r.ref, id - CI_ADD0); break;
     }
@@ -3921,6 +3959,52 @@ static void inputs_loaded(cJSON *j) {
     panels_prefetch();
 }
 
+static void keys_loaded(const char *json) {
+    cJSON *j = cJSON_Parse(json);
+    cJSON *out = j && !cJSON_IsFalse(cJSON_GetObjectItem(j, "returnValue")) ? cJSON_GetObjectItem(j, "stdoutString") : NULL;
+    int phase = key_phase, learned = 0;
+    key_phase = KP_NONE;
+    if (!cJSON_IsString(out)) {
+        LOG("keys exec failed: %.200s\n", json);
+        if (phase != KP_NONE) show_toast("Couldn't change the remote button", true);
+        cJSON_Delete(j);
+        return;
+    }
+    nkeybinds = 0;
+    char buf[2048], *save = NULL;
+    snprintf(buf, sizeof(buf), "%s", out->valuestring);
+    for (char *line = strtok_r(buf, "\n", &save); line; line = strtok_r(NULL, "\n", &save)) {
+        int code;
+        char id[96];
+        if (sscanf(line, "learned %d", &code) == 1) learned = code;
+        else if (nkeybinds < COUNT(keybinds) && sscanf(line, "%d %95s", &code, id) == 2) {
+            keybinds[nkeybinds].code = code;
+            snprintf(keybinds[nkeybinds].id, sizeof(keybinds[0].id), "%s", id);
+            nkeybinds++;
+        }
+    }
+    cJSON_Delete(j);
+    LOG("keys: %d bound%s\n", nkeybinds, learned ? ", one learned" : "");
+    char t[128];
+    switch (phase) {
+        case KP_LEARN:
+            if (!learned) { show_toast("No button pressed", false); break; }
+            snprintf(t, sizeof(t), "bind %d %s", learned, key_app_id);
+            key_phase = KP_BIND;
+            keys_exec(t);
+            break;
+        case KP_BIND:
+            snprintf(t, sizeof(t), "That button now opens %s", key_app_title);
+            show_toast(t, false);
+            break;
+        case KP_UNBIND:
+            snprintf(t, sizeof(t), "Remote button removed from %s", key_app_title);
+            show_toast(t, false);
+            break;
+        default: break;
+    }
+}
+
 static void replies_drain(void) {
     pthread_mutex_lock(&rq_mtx);
     reply_t q[64];
@@ -3954,6 +4038,11 @@ static void replies_drain(void) {
                 ui_refresh(false);
             }
             cJSON_Delete(j);
+            free(q[i].json);
+            continue;
+        }
+        if (k == RQ_KEYS) {                      /* raw exec: the binding table, after "learned N" */
+            keys_loaded(q[i].json);
             free(q[i].json);
             continue;
         }
@@ -4439,7 +4528,7 @@ int main(void) {
     /* fixed-size panels are rendered ahead for every wallpaper; data-sized ones follow later */
     for (int m = 0; m < 2 * CC_N; m++) { int mx, my, mw; cc_rect(m / 2, &mx, &my, &mw); glass_job(G_CCM + m, mw, CC_U); }
     for (int o = 0; o < 16; o++) glass_job(G_CCO + o, CC_W, CC_OPT_H);
-    for (int n = 1; n <= 7; n++) glass_job(G_CTX, 440, ctx_height(n));
+    for (int n = 1; n <= COUNT(ctx_ids); n++) glass_job(G_CTX, 440, ctx_height(n));
     pthread_t wt;
     pthread_create(&wt, NULL, glass_worker, NULL);
 
@@ -4463,6 +4552,8 @@ int main(void) {
     rq_send(RQ_APPS, false, "luna://com.webos.applicationManager/listLaunchPoints", "{}", NULL);
     rq_send(RQ_INPUTS, false, "luna://com.webos.service.eim/getAllInputStatus", "{}", NULL);
     rq_send(RQ_TIMEFMT, false, "luna://com.webos.service.systemservice/getPreferences", "{\"keys\":[\"timeFormat\"]}", NULL);
+    homehook_query();    /* the hold-OK menu offers button binding only in hook mode */
+    keys_exec("binds");
     pthread_t wxt;
     pthread_create(&wxt, NULL, weather_thread, NULL);
 

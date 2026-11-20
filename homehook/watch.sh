@@ -3,6 +3,7 @@
 #   watch.sh install     link the boot hook, clear the off switch, start the watcher
 #   watch.sh uninstall   unlink the boot hook, set the off switch (takes effect at once), stop
 #   watch.sh status      one line for myTV's settings: hook | poll | off | lginputhook | none
+#   watch.sh learn | bind <code> <app> | unbind <app> | binds   remote buttons bound to apps
 # HBC's run-parts calls it with no argument at boot through the init.d link. run-parts waits
 # for every hook and skips names with a dot, hence the link name and the detach below.
 #
@@ -32,6 +33,9 @@ PRESSED=$STATE/homehook.pressed     # mtime = the last Home press the hook took
 LAST_FG=$STATE/last_fg              # the foreground while awake; on disk so a cold boot sees it too
 LASTINPUT=/var/lib/eim/lastinput
 LASTINPUT_ORIG=$STATE/lastinput.orig  # eim's record while lastinput points at myTV
+KEYBINDS=$STATE/keybinds            # remote button -> app, read by the hook (mytvhook.c)
+KEYS_LEARN=$STATE/keys.learn
+KEYS_LEARNED=$STATE/keys.learned
 ALLOW=/tmp/mytv-allow-lg-home
 LGINPUTHOOK=/home/root/.config/lginputhook/keybinds.json
 LGHOME=com.webos.app.home
@@ -273,6 +277,34 @@ case "$1" in
     restore_lastinput
     rm -f "$MODE"
     ;;
+  # Remote buttons -> apps. Every command prints the table after it: "<code> <app id>" per line.
+  # learn waits for the next bindable press (the hook takes it from the TV) and prints
+  # "learned <code>" first, or nothing when no button came in time.
+  learn)
+    mkdir -p "$STATE"
+    rm -f "$KEYS_LEARNED"
+    touch "$KEYS_LEARN"
+    n=0
+    # busybox sleep takes whole seconds; 18 s stays inside the hook's LEARN_SECS window
+    while [ ! -s "$KEYS_LEARNED" ] && [ "$n" -lt 18 ]; do sleep 1; n=$((n + 1)); done
+    [ -s "$KEYS_LEARNED" ] && echo "learned $(cat "$KEYS_LEARNED")"
+    rm -f "$KEYS_LEARN" "$KEYS_LEARNED"
+    cat "$KEYBINDS" 2>/dev/null
+    ;;
+  bind|unbind)
+    code=$2; id=$3
+    [ "$1" = unbind ] && { id=$2; code=0; }
+    case "$code" in ''|*[!0-9]*) exit 2 ;; esac
+    case "$id" in ''|*[!A-Za-z0-9._-]*) exit 2 ;; esac
+    [ "$1" = bind ] && [ "$code" -lt 1024 ] && exit 2
+    mkdir -p "$STATE"
+    # one button per app and one app per button; replaced atomically, the hook reads it mid-write
+    awk -v c="$code" -v i="$id" '$1 != c && $2 != i' "$KEYBINDS" 2>/dev/null > "$KEYBINDS.new"
+    [ "$1" = bind ] && echo "$code $id" >> "$KEYBINDS.new"
+    mv "$KEYBINDS.new" "$KEYBINDS"
+    cat "$KEYBINDS"
+    ;;
+  binds) cat "$KEYBINDS" 2>/dev/null ;;
   status)
     if [ -f "$DISABLED" ] || [ ! -L "$LINK" ]; then echo off
     elif lginputhook_owns_home; then echo lginputhook
@@ -288,6 +320,6 @@ case "$1" in
     rm -f "$TRIES"   # a reboot earns the daemons a fresh set of attempts
     start_watcher boot
     ;;
-  *) echo "usage: $0 [install|uninstall|status]" >&2; exit 2 ;;
+  *) echo "usage: $0 [install|uninstall|status|learn|bind|unbind|binds]" >&2; exit 2 ;;
 esac
 exit 0

@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Remote app buttons (such as Netflix or Prime Video) can open any installed app: hold OK on a
+  tile, choose Assign Remote Button and press the button. Needs the Home button hook on a rooted TV.
+
 ### Fixed
 
 - Power-on after leaving the TV in an app opens myTV straight away, with no HDMI shown first, after

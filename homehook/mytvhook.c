@@ -3,7 +3,7 @@
  * /dev/uinput events: lginput2 (Magic Remote) and micomservice (IR). Both send a key with
  * libc write() through their GOT, so swapping that one GOT slot is enough: no inline hook, no
  * Frida. A Home press is cut before it reaches uinput, so LG Home never starts, and myTV is
- * launched instead.
+ * launched instead. Remote buttons the user bound to apps in myTV are taken the same way.
  *
  * The library cannot be unloaded (installed GOT entries point into it), so every way of
  * turning it off is a file the hook checks on each Home press; see home_is_ours().
@@ -16,9 +16,12 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <link.h>
+#include <pthread.h>
 #include <linux/input.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
@@ -33,12 +36,23 @@
 #define F_DISABLED  "/var/lib/mytv/homehook.disabled"   /* user turned the feature off */
 #define F_BYPASS    "/var/lib/mytv/homehook.bypass"     /* watcher: myTV keeps crashing */
 #define F_PRESSED   "/var/lib/mytv/homehook.pressed"    /* mtime = last Home taken; watch.sh checks myTV came up */
+/* Remote buttons bound to apps ("<code> <app id>" per line, written by watch.sh bind/unbind), and
+ * the learn handshake: watch.sh learn creates F_LEARN, the next bindable press is written to
+ * F_LEARNED instead of reaching the TV. */
+#define F_KEYBINDS  "/var/lib/mytv/keybinds"
+#define F_LEARN     "/var/lib/mytv/keys.learn"
+#define F_LEARNED   "/var/lib/mytv/keys.learned"
+#define LEARN_SECS  20
+/* LG's own buttons (apps, assistants) sit above the kernel's key range; navigation, OK, Back
+ * (412), numbers and volume are below it, so they can never be bound away. */
+#define KEY_BINDABLE_MIN 1024
 
 typedef ssize_t write_fn(int, const void *, size_t);
 static write_fn *real_write;
 
 /* Decided on the press and kept for its repeats and release, so LG never sees half a key. */
 static volatile bool passing_home;
+static volatile int eaten_code = -1;   /* a bindable key taken on its press */
 
 static bool exists(const char *path) {
     struct stat st;
@@ -78,6 +92,88 @@ static void launch_mytv(void) {
     while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
 }
 
+static void launch_app(const char *id) {
+    char payload[128];
+    snprintf(payload, sizeof(payload), "{\"id\":\"%s\"}", id);   /* before fork: not async-signal-safe */
+    pid_t child = fork();
+    if (child < 0) return;
+    if (child == 0) {
+        if (fork() == 0) {
+            setsid();
+            execl("/usr/bin/luna-send", "luna-send", "-n", "1",
+                  "luna://com.webos.applicationManager/launch", payload, (char *)NULL);
+        }
+        _exit(0);
+    }
+    while (waitpid(child, NULL, 0) < 0 && errno == EINTR) {}
+}
+
+static bool valid_app_id(const char *id) {
+    if (!*id) return false;
+    for (const char *c = id; *c; c++)
+        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')
+              || *c == '.' || *c == '_' || *c == '-')) return false;
+    return true;
+}
+
+/* The table is re-read only when the file changes. Ids are checked again here: they end up in a
+ * JSON payload, and the file is the hook's only input. */
+static struct { int code; char id[96]; } binds[16];
+static int nbinds;
+static struct stat binds_st;
+static pthread_mutex_t binds_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static void binds_reload(void) {
+    struct stat st;
+    if (stat(F_KEYBINDS, &st) != 0) { nbinds = 0; memset(&binds_st, 0, sizeof(binds_st)); return; }
+    if (st.st_mtim.tv_sec == binds_st.st_mtim.tv_sec && st.st_mtim.tv_nsec == binds_st.st_mtim.tv_nsec
+        && st.st_size == binds_st.st_size && st.st_ino == binds_st.st_ino) return;
+    binds_st = st;
+    nbinds = 0;
+    int fd = open(F_KEYBINDS, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd < 0) return;
+    char buf[2048];
+    ssize_t len = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (len <= 0) return;
+    buf[len] = 0;
+    char *save = NULL;
+    for (char *line = strtok_r(buf, "\n", &save); line && nbinds < 16; line = strtok_r(NULL, "\n", &save)) {
+        char id[96];
+        int code;
+        if (sscanf(line, "%d %95s", &code, id) == 2 && code >= KEY_BINDABLE_MIN && valid_app_id(id)) {
+            binds[nbinds].code = code;
+            memcpy(binds[nbinds].id, id, sizeof(id));
+            nbinds++;
+        }
+    }
+}
+
+static bool learning(void) {
+    struct stat st;
+    return stat(F_LEARN, &st) == 0 && time(NULL) - st.st_mtime < LEARN_SECS;
+}
+
+/* A bindable press: learned, or launches its app. True when the key is taken from the TV. */
+static bool take_bindable(int code) {
+    if (!exists(APP_DIR) || exists(F_DISABLED)) return false;
+    if (learning()) {
+        int f = open(F_LEARNED, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0600);
+        if (f >= 0) { dprintf(f, "%d\n", code); close(f); }
+        unlink(F_LEARN);
+        return true;
+    }
+    char id[96] = "";
+    pthread_mutex_lock(&binds_mtx);   /* the daemon may write keys from more than one thread */
+    binds_reload();
+    for (int i = 0; i < nbinds; i++)
+        if (binds[i].code == code) { memcpy(id, binds[i].id, sizeof(id)); break; }
+    pthread_mutex_unlock(&binds_mtx);
+    if (!id[0]) return false;
+    launch_app(id);
+    return true;
+}
+
 static ssize_t hook_write(int fd, const void *buf, size_t n) {
     const size_t ev = sizeof(struct input_event);
     if (n < ev || n % ev != 0 || n > 64 * ev || !is_uinput(fd))
@@ -86,7 +182,7 @@ static ssize_t hook_write(int fd, const void *buf, size_t n) {
     int saved_errno = errno;
     struct input_event in[64], out[64];
     size_t count = n / ev, kept = 0;
-    bool had_home = false;
+    bool dropped = false;
     memcpy(in, buf, n);   /* the caller's buffer may be unaligned */
     for (size_t i = 0; i < count; i++) {
         if (in[i].type == EV_KEY && in[i].code == KEY_LG_HOME) {
@@ -94,12 +190,19 @@ static ssize_t hook_write(int fd, const void *buf, size_t n) {
                 passing_home = !home_is_ours();
                 if (!passing_home) launch_mytv();
             }
-            if (!passing_home) { had_home = true; continue; }
+            if (!passing_home) { dropped = true; continue; }
+        } else if (in[i].type == EV_KEY && in[i].code >= KEY_BINDABLE_MIN) {
+            if (in[i].value == 1) eaten_code = take_bindable(in[i].code) ? in[i].code : -1;
+            if (in[i].code == eaten_code) {
+                if (in[i].value == 0) eaten_code = -1;
+                dropped = true;
+                continue;
+            }
         }
         out[kept++] = in[i];
     }
     errno = saved_errno;
-    if (!had_home) return real_write(fd, buf, n);
+    if (!dropped) return real_write(fd, buf, n);
     if (kept == 0) return (ssize_t)n;
     ssize_t w = real_write(fd, out, kept * ev);
     return w == (ssize_t)(kept * ev) ? (ssize_t)n : w;
