@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-22
 
 ### Added
 
@@ -44,4 +44,5 @@ First public release.
 - Home button opens myTV on rooted TVs, and the TV returns to myTV after standby.
 - Settings for the home screen, wallpaper, screensaver, weather, clock and appearance.
 
+[1.1.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.0.0
