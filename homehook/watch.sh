@@ -89,8 +89,21 @@ restore_lastinput() {
   rm -f "$LASTINPUT_ORIG"
 }
 
+# SAM can list myTV as running under another app's pid with no myTV process at all (seen after
+# a boot that cut an OLED pixel refresh short). Every launch then waits on that ghost forever.
+# Closing it by id clears the entry and releases the waiting launches.
+clear_ghost() {
+  pgrep -f "^$APP/launcher" >/dev/null && return
+  timeout -t 5 luna-send -n 1 luna://com.webos.service.applicationmanager/running '{}' </dev/null 2>/dev/null \
+    | grep -q "\"id\":\"$APP_ID\"" || return
+  timeout -t 5 luna-send -n 1 luna://com.webos.applicationManager/closeByAppId "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
+  log "SAM listed myTV with no process: closed the stale entry"
+}
+
+# A launch that SAM never answers must not stall the main loop.
 launch_mytv() {
-  luna-send -n 1 luna://com.webos.applicationManager/launch "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
+  clear_ghost
+  timeout -t 10 luna-send -n 1 luna://com.webos.applicationManager/launch "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
 }
 
 # A physical input/source the user may want resumed on wake, as opposed to an app or LG Home.
@@ -244,7 +257,11 @@ run() {
           [ $((now - strike_start)) -gt 60 ] && { strikes=0; strike_start=$now; }
           strikes=$((strikes + 1))
           log "Home taken but myTV not in front ($fg), strike $strikes"
-          [ "$strikes" -ge 3 ] && [ ! -f "$BYPASS" ] && { touch "$BYPASS"; log "bypass on: Home goes to LG Home"; }
+          if [ "$strikes" -ge 3 ]; then
+            [ -f "$BYPASS" ] || { touch "$BYPASS"; log "bypass on: Home goes to LG Home"; }
+          else
+            launch_mytv   # the hook's own launch may be stuck behind a ghost entry
+          fi
         fi
       fi
     fi

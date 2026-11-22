@@ -16,6 +16,11 @@ All notable changes to this project are documented here. The format follows
 - White text is slightly heavier, as macOS draws light text on a dark background, so small labels
   stay readable from the sofa.
 
+### Fixed
+
+- Home opens myTV again after the TV was turned on in the middle of an OLED pixel refresh. The TV
+  could list myTV as running with no myTV process, and every launch waited on it.
+
 ## [1.1.0] - 2026-11-22
 
 ### Added
