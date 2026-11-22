@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The clock rolls a changed digit: the old one rises away, shrinking and fading, as the new one
+  springs up from below. Reduce motion turns it off.
+
 ### Changed
 
 - White text is slightly heavier, as macOS draws light text on a dark background, so small labels

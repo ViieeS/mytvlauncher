@@ -4179,6 +4179,104 @@ static void clk_dial_update(const struct tm *lt) {
     }
 }
 
+/* ---- digit roll: the time is one label per character, so a changed digit can move on its own.
+ * After SwiftUI's numericText transition (numbers from a published measurement of it): the
+ * common prefix and suffix stay, each changed character leaves upward while shrinking and
+ * fading and its successor rises from below, on two springs. No blur: it would need a
+ * re-rendered texture every frame on the TV. Opacity, zoom and translate are style changes. */
+#define ROLL_MS 800
+static char clk_text[16];
+static lv_obj_t *clk_ch[16];
+static int clk_nch;
+static lv_opa_t clk_look;
+
+static float spring(float t, float m, float k, float c) {
+    float a = c / (2 * m), w = sqrtf(k / m - a * a);
+    return 1 - expf(-a * t) * (cosf(w * t) + a / w * sinf(w * t));
+}
+
+/* user data: bit 0 = leaving, bit 1 = time went down (pieces move the other way) */
+static void roll_exec(void *var, int32_t ms) {
+    lv_obj_t *o = var;
+    uintptr_t f = (uintptr_t) lv_obj_get_user_data(o);
+    float t = ms / 1000.0f;
+    float A = spring(t, 1, 344, 37), B = spring(t, 2, 470, 34);   /* fade + size, travel */
+    float dir = (f & 2) ? -1 : 1, H = lv_obj_get_height(o) * 0.75f;
+    float opa, zoom, dy;
+    if (f & 1) { opa = 1 - A; zoom = 1 - 0.6016f * A; dy = -dir * 0.59375f * H * B; }
+    else { opa = A; zoom = 0.3984f + 0.6016f * A; dy = dir * 0.59375f * H * (1 - B); }
+    opa = opa < 0 ? 0 : opa > 1 ? 1 : opa;
+    lv_obj_set_style_text_opa(o, (lv_opa_t) (clk_look * opa), 0);
+    lv_obj_set_style_transform_zoom(o, (lv_coord_t) lroundf(256 * (zoom < 0 ? 0 : zoom)), 0);
+    lv_obj_set_style_translate_y(o, (lv_coord_t) lroundf(dy), 0);
+}
+
+static void roll_done(lv_anim_t *a) {
+    lv_obj_t *o = a->var;
+    if ((uintptr_t) lv_obj_get_user_data(o) & 1) { lv_obj_del(o); return; }
+    lv_obj_set_style_text_opa(o, clk_look, 0);
+    lv_obj_set_style_transform_zoom(o, 256, 0);
+    lv_obj_set_style_translate_y(o, 0, 0);
+}
+
+static void roll_start(lv_obj_t *o, uintptr_t flags, uint32_t delay) {
+    lv_obj_update_layout(o);
+    lv_obj_set_style_transform_pivot_x(o, lv_obj_get_width(o) / 2, 0);
+    lv_obj_set_style_transform_pivot_y(o, lv_obj_get_height(o) / 2, 0);
+    lv_obj_set_user_data(o, (void *) flags);
+    roll_exec(o, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, o);
+    lv_anim_set_exec_cb(&a, roll_exec);
+    lv_anim_set_values(&a, 0, ROLL_MS);
+    lv_anim_set_time(&a, ROLL_MS);
+    lv_anim_set_delay(&a, delay);
+    lv_anim_set_ready_cb(&a, roll_done);
+    lv_anim_start(&a);
+}
+
+static lv_obj_t *clk_char(lv_obj_t *row, const lv_font_t *f, uint32_t color, char c) {
+    char s[2] = { c, 0 };
+    lv_obj_t *l = label(row, f, color, s);
+    lv_obj_set_style_text_opa(l, clk_look, 0);
+    return l;
+}
+
+/* Sets the time; animated unless `still` (first show, a rebuild) or the length changed. */
+static void clk_time_set(const char *s, bool still) {
+    if (!strcmp(s, clk_text)) return;
+    const lv_font_t *f = lv_obj_get_style_text_font(clk_time, 0);
+    uint32_t color = lv_color_to32(lv_obj_get_style_text_color(clk_time, 0)) & 0xffffff;
+    int n = (int) strlen(s);
+    if (n != clk_nch || still || motion_off || n >= COUNT(clk_ch)) {
+        lv_obj_clean(clk_time);
+        clk_nch = n < COUNT(clk_ch) ? n : COUNT(clk_ch) - 1;
+        for (int i = 0; i < clk_nch; i++) clk_ch[i] = clk_char(clk_time, f, color, s[i]);
+        snprintf(clk_text, sizeof(clk_text), "%s", s);
+        return;
+    }
+    int lo = 0, hi = n;
+    while (lo < n && s[lo] == clk_text[lo]) lo++;
+    while (hi > lo && s[hi - 1] == clk_text[hi - 1]) hi--;
+    uintptr_t down = strcmp(s, clk_text) < 0 ? 2 : 0;
+    int changed = hi - lo;
+    float step = changed > 1 ? fminf(38.0f / 255, 0.2f / (changed - 1)) : 0;
+    lv_obj_update_layout(clk_time);
+    for (int i = lo; i < hi; i++) {
+        uint32_t delay = (uint32_t) lroundf(800 * (i - lo) * step);
+        lv_obj_t *old = clk_char(clk_time, f, color, clk_text[i]);   /* the leaving copy floats */
+        lv_obj_add_flag(old, LV_OBJ_FLAG_IGNORE_LAYOUT | LV_OBJ_FLAG_FLOATING);
+        lv_obj_set_pos(old, lv_obj_get_x(clk_ch[i]), lv_obj_get_y(clk_ch[i]));
+        roll_start(old, 1 | down, delay);
+        char c[2] = { s[i], 0 };
+        lv_anim_del(clk_ch[i], roll_exec);
+        lv_label_set_text(clk_ch[i], c);
+        roll_start(clk_ch[i], down, delay);
+    }
+    snprintf(clk_text, sizeof(clk_text), "%s", s);
+}
+
 /* html.clock-small/-large/-xl/-huge zoom the whole block, its offsets from the edges included */
 static const int CLOCK_ZOOM[5] = { 205, 256, 320, 384, 563 };
 static int status_dock_dy(void) { return prefs.clock_stacked ? 730 : 830; }
@@ -4228,8 +4326,13 @@ static void status_build(void) {
             lv_obj_set_style_text_opa(clk_cdate, (lv_opa_t) (look * 0xd9 / 255), 0);
             lv_obj_set_style_pad_right(clk_cdate, 14, 0);
         }
-        clk_time = label(digits, tf, color, "");
-        lv_obj_set_style_text_opa(clk_time, look, 0);
+        clk_time = flex_box(digits, LV_FLEX_FLOW_ROW, LV_FLEX_ALIGN_END, 0);   /* filled by clk_time_set */
+        lv_obj_add_flag(clk_time, LV_OBJ_FLAG_OVERFLOW_VISIBLE);       /* digits roll in from below */
+        lv_obj_set_style_text_font(clk_time, tf, 0);
+        lv_obj_set_style_text_color(clk_time, lv_color_hex(color), 0);
+        clk_look = look;
+        clk_text[0] = 0;
+        clk_nch = 0;
         if (st == CS_SECONDS) {                                         /* .clock__sec .8em .7 */
             clk_sec = label(digits, small, color, "");
             lv_obj_set_style_text_opa(clk_sec, 0xb3, 0);
@@ -4293,7 +4396,7 @@ static void clock_tick(lv_timer_t *t) {
     if (clk_time) {
         if (h12) snprintf(s, sizeof(s), "%d:%02d", lt->tm_hour % 12 ? lt->tm_hour % 12 : 12, lt->tm_min);
         else snprintf(s, sizeof(s), "%02d:%02d", lt->tm_hour, lt->tm_min);
-        if (strcmp(lv_label_get_text(clk_time), s)) { lv_label_set_text(clk_time, s); changed = true; }
+        if (strcmp(clk_text, s)) { clk_time_set(s, !t); changed = true; }
         const char *p = h12 && prefs.show_ampm ? (lt->tm_hour < 12 ? "AM" : "PM") : "";
         if (strcmp(lv_label_get_text(clk_period), p)) { lv_label_set_text(clk_period, p); changed = true; }
         if (clk_sec) {
