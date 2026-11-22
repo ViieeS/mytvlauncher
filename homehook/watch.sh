@@ -91,18 +91,31 @@ restore_lastinput() {
 
 # SAM can list myTV as running under another app's pid with no myTV process at all (seen after
 # a boot that cut an OLED pixel refresh short). Every launch then waits on that ghost forever.
-# Closing it by id clears the entry and releases the waiting launches.
-clear_ghost() {
-  pgrep -f "^$APP/launcher" >/dev/null && return
+# Closing it by id clears the entry and releases the waiting launches. A launch in progress
+# looks the same for a moment, before its process has exec'd launcher: only an entry whose pid
+# is still the same foreign process 5 s later is a ghost.
+sam_mytv_pid() {
   timeout -t 5 luna-send -n 1 luna://com.webos.service.applicationmanager/running '{}' </dev/null 2>/dev/null \
-    | grep -q "\"id\":\"$APP_ID\"" || return
+    | tr '{' '\n' | grep "\"id\":\"$APP_ID\"" | sed -n 's/.*"processid":"\{0,1\}\([0-9][0-9]*\).*/\1/p'
+}
+is_mytv_pid() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q "^$APP/launcher"; }
+# Fails when the launch it waited on came up: a second launch would then be stale, and could pull
+# myTV over an app the user opened from it meanwhile.
+clear_ghost() {
+  ghost=$(sam_mytv_pid)
+  [ -n "$ghost" ] || return 0
+  is_mytv_pid "$ghost" && return 0
+  sleep 5
+  again=$(sam_mytv_pid)
+  is_mytv_pid "$again" && return 1
+  [ "$again" = "$ghost" ] || return 0
   timeout -t 5 luna-send -n 1 luna://com.webos.applicationManager/closeByAppId "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
-  log "SAM listed myTV with no process: closed the stale entry"
+  log "SAM listed myTV under pid $ghost ($(cat "/proc/$ghost/comm" 2>/dev/null)), not myTV: closed the entry"
 }
 
 # A launch that SAM never answers must not stall the main loop.
 launch_mytv() {
-  clear_ghost
+  clear_ghost || return
   timeout -t 10 luna-send -n 1 luna://com.webos.applicationManager/launch "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
 }
 
