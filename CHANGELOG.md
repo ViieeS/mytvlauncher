@@ -15,6 +15,8 @@ All notable changes to this project are documented here. The format follows
 
 - White text is slightly heavier, as macOS draws light text on a dark background, so small labels
   stay readable from the sofa.
+- The typeface is Inter instead of Geist, in the UI and the app icon. Inter is the open design
+  closest to Apple TV's SF Pro, and its optical sizes follow the text size.
 
 ## [1.1.0] - 2026-11-22
 

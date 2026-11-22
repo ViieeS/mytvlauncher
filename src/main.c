@@ -1652,7 +1652,7 @@ static lv_obj_t *make_tile(lv_obj_t *parent, ref_t r, int x, int y, bool small, 
             lv_obj_center(i);
         } else {
             char s[2] = { (char) ((a->title[0] >= 'a' && a->title[0] <= 'z') ? a->title[0] - 32 : a->title[0]), 0 };
-            lv_obj_center(label(t, &geist_64s, C_TEXT, s));
+            lv_obj_center(label(t, &font_64s, C_TEXT, s));
         }
     } else if (r.kind == IT_FOLDER) {
         /* .tile__folder: a 2x2 preview of the first four apps, 76 % x 72 % of the tile */
@@ -1722,10 +1722,10 @@ static void row_fill(int ri, int kind, const ref_t *items, int n) {
         R->dot[i] = d;
     }
     /* .tile__label: under the focused tile, 19px/600, two lines, centred on the tile + gap */
-    R->label = label(R->track, &geist_19s, C_TEXT, "");
+    R->label = label(R->track, &font_19s, C_TEXT, "");
     lv_obj_set_width(R->label, TILE_W + TILE_GAP - 8);
     lv_label_set_long_mode(R->label, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(R->label, lv_font_get_line_height(&geist_19s) * 2);
+    lv_obj_set_height(R->label, lv_font_get_line_height(&font_19s) * 2);
     lv_obj_set_style_text_align(R->label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_opa(R->label, 0, 0);
     lv_obj_set_width(R->track, row_width(R) > 0 ? row_width(R) : 1);
@@ -1879,12 +1879,12 @@ static ref_t panel_ref[16];
 /* lumen .panel__grid: 3 columns of 200x120 tiles with wrapping labels under them; a grid row
  * is as tall as its tallest label. Returns the panel height; fills each tile's y if asked. */
 static int grid3_layout(const ref_t *items, int n, int *ty) {
-    int y = 96, lh = lv_font_get_line_height(&geist_24s);
+    int y = 96, lh = lv_font_get_line_height(&font_24s);
     for (int r = 0; r * 3 < (n ? n : 1); r++) {
         int maxh = lh;
         for (int c = 0; c < 3 && r * 3 + c < n; c++) {
             lv_point_t sz;
-            lv_txt_get_size(&sz, ref_title(items[r * 3 + c]), &geist_24s, 0, 0, PANEL_TILE_W, LV_TEXT_FLAG_NONE);
+            lv_txt_get_size(&sz, ref_title(items[r * 3 + c]), &font_24s, 0, 0, PANEL_TILE_W, LV_TEXT_FLAG_NONE);
             if (sz.y > maxh) maxh = sz.y;
             if (ty) ty[r * 3 + c] = y;
         }
@@ -1898,18 +1898,18 @@ static void grid_panel(int kind, const char *title, const ref_t *items, int n, z
     int ty[16];
     int h = grid3_layout(items, n, ty);
     lv_obj_t *p = overlay_open(kind, 760, h);
-    lv_obj_set_pos(label(p, &geist_30s, C_TEXT, title), 36 + 6, 30);
+    lv_obj_set_pos(label(p, &font_30s, C_TEXT, title), 36 + 6, 30);
     panel_n = n;
     for (int i = 0; i < n; i++) {
         int tx = 42 + (i % 3) * (PANEL_TILE_W + 24);
         panel_ref[i] = items[i];
         panel_obj[i] = make_tile(p, items[i], tx, ty[i], true, TAG(z, 0, i));
-        lv_obj_t *l = label(p, &geist_24s, C_TEXT, ref_title(items[i]));
+        lv_obj_t *l = label(p, &font_24s, C_TEXT, ref_title(items[i]));
         lv_obj_set_width(l, PANEL_TILE_W);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_pos(l, tx, ty[i] + PANEL_TILE_H + 12);
     }
-    if (!n) lv_obj_set_pos(label(p, &geist_24m, 0xAAAAAA, "No inputs selected: add some in Settings > Sources"), 42, 100);
+    if (!n) lv_obj_set_pos(label(p, &font_24m, 0xAAAAAA, "No inputs selected: add some in Settings > Sources"), 42, 100);
 }
 
 static int inputs_shown(ref_t *items) {
@@ -1992,7 +1992,7 @@ static void open_ctx(bool from_folder) {
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_user_data(row, TAG(Z_CTX, 0, i));
         bool unbind = ctx_ids[i] == CI_BIND && key_bound(apps[r.ref].id);
-        lv_obj_t *l = label(row, &geist_28m, C_TEXT, unbind ? "Remove Remote Button" : CI_LABELS[ctx_ids[i]]);
+        lv_obj_t *l = label(row, &font_28m, C_TEXT, unbind ? "Remove Remote Button" : CI_LABELS[ctx_ids[i]]);
         lv_obj_set_style_text_color(l, lv_color_hex(0x111111), LV_STATE_FOCUSED);
         lv_obj_align(l, LV_ALIGN_LEFT_MID, 24, 0);
         ctx_rows[i] = row;
@@ -2059,13 +2059,13 @@ static bool sw_on_all;
 
 static void switcher_build(void) {
     lv_obj_clean(switcher_layer);
-    lv_obj_t *t = label(switcher_layer, &geist_44b, 0xFFFFFF, "Recent Apps");
+    lv_obj_t *t = label(switcher_layer, &font_44b, 0xFFFFFF, "Recent Apps");
     lv_obj_set_width(t, SCR_W);
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(t, 0, 110);
-    int strip_y = 110 + lv_font_get_line_height(&geist_44b) + 70;
+    int strip_y = 110 + lv_font_get_line_height(&font_44b) + 70;
     if (!sw_n) {
-        lv_obj_t *e = label(switcher_layer, &geist_34m, 0xFFFFFF, "No other apps are open");
+        lv_obj_t *e = label(switcher_layer, &font_34m, 0xFFFFFF, "No other apps are open");
         lv_obj_set_style_text_opa(e, 0xb3, 0);
         lv_obj_set_width(e, SCR_W);
         lv_obj_set_style_text_align(e, LV_TEXT_ALIGN_CENTER, 0);
@@ -2105,9 +2105,9 @@ static void switcher_build(void) {
         } else {
             char m[2] = { a >= 0 ? apps[a].title[0] : sw_ids[i][0], 0 };
             if (m[0] >= 'a' && m[0] <= 'z') m[0] -= 32;
-            lv_obj_center(label(art, &geist_96b, 0xFFFFFF, m));
+            lv_obj_center(label(art, &font_96b, 0xFFFFFF, m));
         }
-        lv_obj_t *n = label(card, &geist_30s, 0xFFFFFF, a >= 0 ? apps[a].title : sw_ids[i]);
+        lv_obj_t *n = label(card, &font_30s, 0xFFFFFF, a >= 0 ? apps[a].title : sw_ids[i]);
         lv_obj_set_width(n, 400);
         lv_label_set_long_mode(n, LV_LABEL_LONG_DOT);
         lv_obj_set_style_text_align(n, LV_TEXT_ALIGN_CENTER, 0);
@@ -2115,17 +2115,17 @@ static void switcher_build(void) {
         sw_cards[i] = card;
     }
     int y = strip_y + 225 + 22 + 40 + 80 + 36;
-    lv_obj_t *h = label(switcher_layer, &geist_26m, 0xFFFFFF, "Up closes an app, OK opens it");
+    lv_obj_t *h = label(switcher_layer, &font_26m, 0xFFFFFF, "Up closes an app, OK opens it");
     lv_obj_set_style_text_opa(h, 0x99, 0);
     lv_obj_set_width(h, SCR_W);
     lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(h, 0, y);
     /* .switcher__all: pill, 18px 56px, 32px, rgba(255,255,255,.14); focused white with #111 */
     sw_all = box(switcher_layer, 0, y + 34 + 60, 0, 0);
-    lv_obj_t *l = label(sw_all, &geist_32m, 0xFFFFFF, "Close all");
+    lv_obj_t *l = label(sw_all, &font_32m, 0xFFFFFF, "Close all");
     lv_obj_set_style_text_color(l, lv_color_hex(0x111111), LV_STATE_FOCUSED);
-    int lw = lv_txt_get_width("Close all", 9, &geist_32m, 0, 0);
-    lv_obj_set_size(sw_all, lw + 112, lv_font_get_line_height(&geist_32m) + 36);
+    int lw = lv_txt_get_width("Close all", 9, &font_32m, 0, 0);
+    lv_obj_set_size(sw_all, lw + 112, lv_font_get_line_height(&font_32m) + 36);
     lv_obj_set_x(sw_all, (SCR_W - lw - 112) / 2);
     lv_obj_center(l);
     lv_obj_set_style_radius(sw_all, 999, 0);
@@ -2339,8 +2339,8 @@ static void cc_tile(lv_obj_t *grid, int id, const lv_img_dsc_t *ic, const char *
     cc.icon[id] = cc_glyph(m, ic);
     lv_obj_align(cc.icon[id], LV_ALIGN_LEFT_MID, 20, 0);
     int lh = 25, ty = (CC_U - 2 * lh) / 2;
-    lv_obj_set_pos(label(m, &geist_21s, 0xFFFFFF, name), 20 + 40 + 14, ty);
-    cc.sub[id] = label(m, &geist_21m, 0xFFFFFF, "");
+    lv_obj_set_pos(label(m, &font_21s, 0xFFFFFF, name), 20 + 40 + 14, ty);
+    cc.sub[id] = label(m, &font_21m, 0xFFFFFF, "");
     lv_obj_set_style_text_opa(cc.sub[id], 0xb3, 0);
     lv_obj_set_pos(cc.sub[id], 20 + 40 + 14, ty + lh);
     cc.mod[id] = m;
@@ -2377,12 +2377,12 @@ static void cc_build_grid(lv_obj_t *p) {
     lv_obj_set_style_bg_opa(cc.fill, 0x6a, LV_STATE_FOCUSED);
     cc.icon[CC_BACKLIGHT] = cc_glyph(s, &ic_sun_34);
     lv_obj_align(cc.icon[CC_BACKLIGHT], LV_ALIGN_LEFT_MID, 22, 0);
-    lv_obj_align(label(s, &geist_21s, 0xFFFFFF, "Backlight"), LV_ALIGN_LEFT_MID, 22 + 34 + 12, 0);
-    cc.num = label(s, &geist_21m, 0xFFFFFF, "");
+    lv_obj_align(label(s, &font_21s, 0xFFFFFF, "Backlight"), LV_ALIGN_LEFT_MID, 22 + 34 + 12, 0);
+    cc.num = label(s, &font_21m, 0xFFFFFF, "");
     lv_obj_align(cc.num, LV_ALIGN_RIGHT_MID, -26, 0);
     cc.mod[CC_BACKLIGHT] = s;
 
-    cc.caption = label(cc.grid, &geist_20s, 0xFFFFFF, "");
+    cc.caption = label(cc.grid, &font_20s, 0xFFFFFF, "");
     lv_obj_set_width(cc.caption, CC_W);
     lv_obj_set_style_text_align(cc.caption, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(cc.caption, 0, 4 * (CC_U + CC_GAP) + 2);
@@ -2422,7 +2422,7 @@ static void cc_list_open(int cell) {
         cc.opt_icon[i] = cc_glyph(o, ICONS[cell]);
         lv_obj_set_style_img_recolor_opa(cc.opt_icon[i], i == cc_opt_current(cell) ? LV_OPA_COVER : 0, 0);
         lv_obj_align(cc.opt_icon[i], LV_ALIGN_LEFT_MID, 20, 0);
-        lv_obj_align(label(o, &geist_21s, 0xFFFFFF, labels[i]), LV_ALIGN_LEFT_MID, 20 + 34 + 14, 0);
+        lv_obj_align(label(o, &font_21s, 0xFFFFFF, labels[i]), LV_ALIGN_LEFT_MID, 20 + 34 + 14, 0);
         cc.opt[i] = o;
     }
     cc.listing = true;
@@ -3068,12 +3068,12 @@ static lv_obj_t *list_row(lv_obj_t *track, int i, const char *text, const char *
         x += 30 + 18;
     }
     /* .slist__label flex 1 with ellipsis: one line, everything the value and chevron leave */
-    int vw = value[0] ? lv_txt_get_width(value, strlen(value), &geist_32m, 0, 0) : 0;
+    int vw = value[0] ? lv_txt_get_width(value, strlen(value), &font_32m, 0, 0) : 0;
     if (vw > 380) vw = 380;
-    lv_obj_t *l = label(r, &geist_32m, ink, text);
+    lv_obj_t *l = label(r, &font_32m, ink, text);
     lv_obj_set_style_text_opa(l, 0xf0, 0);
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-    lv_obj_set_size(l, 920 - x - 34 - (chevron ? 34 : 0) - (vw ? vw + 24 : 0), lv_font_get_line_height(&geist_32m));
+    lv_obj_set_size(l, 920 - x - 34 - (chevron ? 34 : 0) - (vw ? vw + 24 : 0), lv_font_get_line_height(&font_32m));
     lv_obj_align(l, LV_ALIGN_LEFT_MID, x, 0);
     int right = 34;
     if (chevron) {                                     /* .slist__chevron 14x24 at .5 */
@@ -3087,10 +3087,10 @@ static lv_obj_t *list_row(lv_obj_t *track, int i, const char *text, const char *
         right += 14 + 20;
     }
     if (value[0]) {
-        lv_obj_t *v = label(r, &geist_32m, ink, value);
+        lv_obj_t *v = label(r, &font_32m, ink, value);
         lv_obj_set_style_text_opa(v, 0x8c, 0);
         lv_label_set_long_mode(v, LV_LABEL_LONG_DOT);
-        lv_obj_set_size(v, vw, lv_font_get_line_height(&geist_32m));
+        lv_obj_set_size(v, vw, lv_font_get_line_height(&font_32m));
         lv_obj_set_style_text_align(v, LV_TEXT_ALIGN_RIGHT, 0);
         lv_obj_align(v, LV_ALIGN_RIGHT_MID, -right, 0);
     }
@@ -3107,11 +3107,11 @@ static void fill_list(void) {
     static const char *const TITLE_ROOT = "Settings";
     const char *title = PG->kind == P_ROOT ? TITLE_ROOT : PG->kind == P_GROUP ? SGROUPS[PG->arg].label : OPTS[PG->arg].label;
     /* .slist__title: top 56, 52px/600 at .62, centred */
-    lv_obj_t *t = label(set_page, &geist_52s, 0xFFFFFF, title);
+    lv_obj_t *t = label(set_page, &font_52s, 0xFFFFFF, title);
     lv_obj_set_style_text_opa(t, 0x9e, 0);
     lv_obj_set_width(t, SCR_W);
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(t, 0, 56 + (72 - lv_font_get_line_height(&geist_52s)) / 2);
+    lv_obj_set_pos(t, 0, 56 + (72 - lv_font_get_line_height(&font_52s)) / 2);
     /* .slist__side: a 480px rounded glyph box and the description, centred in x 110-750 */
     int side_y = (SCR_H - (480 + 40 + 140)) / 2;
     lv_obj_t *ib = box(set_page, 110 + (640 - 480) / 2, side_y, 480, 480);
@@ -3123,7 +3123,7 @@ static void fill_list(void) {
     lv_obj_set_style_img_recolor_opa(set_glyph, LV_OPA_COVER, 0);
     lv_obj_set_style_img_opa(set_glyph, 0xbf, 0);
     lv_obj_center(set_glyph);
-    set_desc = label(set_page, &geist_26m, 0xFFFFFF, "");
+    set_desc = label(set_page, &font_26m, 0xFFFFFF, "");
     lv_obj_set_style_text_opa(set_desc, 0x9e, 0);
     lv_obj_set_style_text_line_space(set_desc, 11, 0);           /* line-height 1.45 */
     lv_obj_set_style_text_align(set_desc, LV_TEXT_ALIGN_CENTER, 0);
@@ -3221,11 +3221,11 @@ static lv_obj_t *check_badge(lv_obj_t *parent, int x, int size) {
 
 /* .settings__hint: centred, 22px at .55, in the 72px head */
 static void page_hint(const char *text) {
-    lv_obj_t *h = label(set_page, &geist_22m, 0xFFFFFF, text);
+    lv_obj_t *h = label(set_page, &font_22m, 0xFFFFFF, text);
     lv_obj_set_style_text_opa(h, 0x8c, 0);
     lv_obj_set_width(h, SCR_W);
     lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(h, 0, 84 + (72 - lv_font_get_line_height(&geist_22m)) / 2);
+    lv_obj_set_pos(h, 0, 84 + (72 - lv_font_get_line_height(&font_22m)) / 2);
 }
 
 static void fill_grid(void) {
@@ -3244,7 +3244,7 @@ static void fill_grid(void) {
         set_tile_state(i);
     }
     track_fit(720, 16 + (set_n + 5) / 6 * 242);
-    set_label = label(set_track, &geist_19s, C_TEXT, "");
+    set_label = label(set_track, &font_19s, C_TEXT, "");
     lv_obj_set_width(set_label, TILE_W + TILE_GAP - 8);
     lv_obj_set_style_text_align(set_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_opa(set_label, 0, 0);
@@ -3281,8 +3281,8 @@ static void fill_wallpaper(void) {
     page_hint("Left and right change category \xC2\xB7 OK sets the wallpaper \xC2\xB7 Back returns");
     int top = 84 + 72 + 18;
     /* .wp__chip--on: the only category natively (the cloud ones need https) */
-    set_chip = box(set_page, EDGE, top, lv_txt_get_width("Defaults", 8, &geist_22m, 0, 0) + 52, lv_font_get_line_height(&geist_22m) + 20);
-    lv_obj_t *cl = label(set_chip, &geist_22m, C_TEXT, "Defaults");
+    set_chip = box(set_page, EDGE, top, lv_txt_get_width("Defaults", 8, &font_22m, 0, 0) + 52, lv_font_get_line_height(&font_22m) + 20);
+    lv_obj_t *cl = label(set_chip, &font_22m, C_TEXT, "Defaults");
     lv_obj_center(cl);
     lv_obj_set_style_radius(set_chip, 999, 0);
     lv_obj_set_style_bg_color(set_chip, lv_color_white(), 0);
@@ -3317,10 +3317,10 @@ static void fill_wallpaper(void) {
         else {
             lv_obj_set_style_bg_color(t, lv_color_white(), 0);
             lv_obj_set_style_bg_opa(t, 0x1a, 0);
-            lv_obj_center(label(t, &geist_28m, 0xAAAAAA, c < 0 ? "Select all" : "..."));
+            lv_obj_center(label(t, &font_28m, 0xAAAAAA, c < 0 ? "Select all" : "..."));
         }
         wp_ticks[i] = check_badge(t, 360 - 12 - 38, 38);
-        lv_obj_t *l = label(set_track, &geist_20m, 0xAAAAAA, c < 0 ? "Select all" : T[c]);
+        lv_obj_t *l = label(set_track, &font_20m, 0xAAAAAA, c < 0 ? "Select all" : T[c]);
         lv_obj_set_width(l, 360);
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(l, x, y + 203 + 14);
@@ -4310,8 +4310,8 @@ static void status_build(void) {
     uint32_t color = CLOCK_COLORS[prefs.clock_color];
     lv_opa_t look = prefs.clock_frosted ? 0xa6 : LV_OPA_COVER;     /* frosted: see-through white */
     const lv_font_t *tf = stacked ? (w == 0 ? &clk_104l : w == 2 ? &clk_104b : &clk_104s)
-                                  : (w == 0 ? &geist_30l : w == 2 ? &geist_30b : &geist_30m);
-    const lv_font_t *small = stacked ? &clk_84s : &geist_24m;
+                                  : (w == 0 ? &font_30l : w == 2 ? &font_30b : &font_30m);
+    const lv_font_t *small = stacked ? &clk_84s : &font_24m;
 
     lv_obj_t *row = stacked ? status_cont : flex_box(status_cont, LV_FLEX_FLOW_ROW, LV_FLEX_ALIGN_CENTER, 12);
     if (!stacked) clk_date = label(row, tf, C_TEXT, "");               /* .status__row .status__date */
@@ -4338,14 +4338,14 @@ static void status_build(void) {
             lv_obj_set_style_text_opa(clk_sec, 0xb3, 0);
             lv_obj_set_style_pad_left(clk_sec, 2, 0);
         }
-        const lv_font_t *pf = stacked ? &geist_36m : &geist_30m;       /* .clock__period: align-self centre */
+        const lv_font_t *pf = stacked ? &font_36m : &font_30m;       /* .clock__period: align-self centre */
         clk_period = label(digits, pf, color, "");
         lv_obj_set_style_text_opa(clk_period, prefs.clock_frosted ? 0xb3 : LV_OPA_COVER, 0);
         lv_obj_set_style_pad_left(clk_period, 6, 0);
         lv_obj_set_style_pad_bottom(clk_period, (lv_font_get_line_height(tf) - lv_font_get_line_height(pf)) / 2, 0);
     }
     if (stacked) {                                                      /* .status__date--long 32/500 */
-        clk_date = label(status_cont, &geist_32m, C_TEXT, "");
+        clk_date = label(status_cont, &font_32m, C_TEXT, "");
         lv_obj_set_style_pad_left(clk_date, 4, 0);
     }
     lv_obj_set_style_text_opa(clk_date, look, 0);
@@ -4355,7 +4355,7 @@ static void status_build(void) {
     if (stacked) lv_obj_set_style_pad_left(status_wx, 4, 0);
     status_wx_icon = image(status_wx, &wx_cloud);
     lv_obj_set_style_img_opa(status_wx_icon, 0xd1, 0);
-    status_wx_text = label(status_wx, stacked ? &geist_28m : &geist_22m, C_TEXT, "");
+    status_wx_text = label(status_wx, stacked ? &font_28m : &font_22m, C_TEXT, "");
     lv_obj_set_style_text_opa(status_wx_text, 0xd1, 0);
     pthread_mutex_lock(&wx_mtx);
     status_wx_set(wx_text);
@@ -4451,7 +4451,7 @@ static void build_ui(void) {
         rows[r].track = group(rows[r].cont, 0, 0, 1, ROW_PITCH, 80);
         rows[r].shown = r == 0;
         if (r) lv_obj_set_style_opa(rows[r].cont, 0, 0);
-        rows[r].label = label(rows[r].track, &geist_19s, C_TEXT, "");
+        rows[r].label = label(rows[r].track, &font_19s, C_TEXT, "");
     }
 
     status_build();
@@ -4463,7 +4463,7 @@ static void build_ui(void) {
         pill_icon[p] = icon(scr, p == 0 ? &ic_inputs_28 : &ic_sliders_28);
         lv_obj_set_pos(pill_icon[p], PILL_X[p] + (PILL - 28) / 2, PILL_Y + (PILL - 28) / 2);
         lv_img_set_pivot(pill_icon[p], 14, 14);
-        topbar_lbl[p] = label(scr, &geist_20m, C_TEXT, names[p]);
+        topbar_lbl[p] = label(scr, &font_20m, C_TEXT, names[p]);
         lv_obj_update_layout(topbar_lbl[p]);
         /* centred under its pill; the last pill's label ends at the pill's right edge */
         int lx = p == 1 ? PILL_X[p] + PILL - lv_obj_get_width(topbar_lbl[p]) : PILL_X[p] + PILL / 2 - lv_obj_get_width(topbar_lbl[p]) / 2;
@@ -4475,7 +4475,7 @@ static void build_ui(void) {
     lv_obj_set_pos(dockhint, SCR_W / 2 - 26, SCR_H - 34 - 30);
     lv_obj_set_style_opa(dockhint, 0, 0);
 
-    movehint = label(scr, &geist_26m, C_TEXT, "Move with the arrows \xC2\xB7 OK to drop");
+    movehint = label(scr, &font_26m, C_TEXT, "Move with the arrows \xC2\xB7 OK to drop");
     lv_obj_set_width(movehint, SCR_W);
     lv_obj_set_style_text_align(movehint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(movehint, 0, 120);
@@ -4488,7 +4488,7 @@ static void build_ui(void) {
     lv_obj_set_style_bg_opa(toast, 0x2e, 0);
     lv_obj_set_style_pad_hor(toast, 28, 0);
     lv_obj_set_style_pad_ver(toast, 14, 0);
-    label(toast, &geist_24m, 0xAAAAAA, "");
+    label(toast, &font_24m, 0xAAAAAA, "");
     lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -56);
     lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN);
 

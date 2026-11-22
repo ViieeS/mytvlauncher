@@ -2,14 +2,14 @@
 Homebrew Channel ask for (80 launcher icon, 130 largeIcon, 160 / 320 for the channel listing),
 and splash.png, the full-screen picture webOS shows while the app starts (splashBackground).
 
-usage: make_app_icon.py <package dir>      (reads tools/geist-700.ttf)
+usage: make_app_icon.py <package dir>      (reads tools/InterVariable.ttf at weight 700)
 """
 import os
 import sys
 from PIL import Image, ImageDraw, ImageFont
 
 OUT = sys.argv[1]
-TTF = os.path.join(os.path.dirname(__file__), "geist-700.ttf")
+TTF = os.path.join(os.path.dirname(__file__), "InterVariable.ttf")
 M = 1024                                   # master size, downscaled for every output
 
 
@@ -25,6 +25,7 @@ def gradient(w, h):
 def wordmark(img, size):
     d = ImageDraw.Draw(img)
     font = ImageFont.truetype(TTF, size)
+    font.set_variation_by_axes([32, 700])   # opsz 32 (display), wght 700
     text = "myTV"
     l, t, r, b = d.textbbox((0, 0), text, font=font)
     w, h = img.size

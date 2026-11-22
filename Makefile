@@ -76,7 +76,7 @@ deps:
 	sh tools/fetch_deps.sh deps
 
 assets:
-	$(PYTHON) tools/make_fonts.py tools assets/fonts.c assets/fonts.h
+	$(PYTHON) tools/make_fonts.py tools/InterVariable.ttf assets/fonts.c assets/fonts.h
 	$(PYTHON) tools/make_icons.py assets/icons.c assets/icons.h
 	$(PYTHON) tools/make_app_icon.py package
 

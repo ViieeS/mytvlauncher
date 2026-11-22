@@ -4,12 +4,15 @@ Stands in for lv_font_conv: FreeType (via Pillow) renders each glyph, this scrip
 bitmaps and metrics. No kerning table -- lumen's tracking (letter-spacing) is applied by
 trimming every advance instead, which is what the CSS does too.
 
-usage: make_fonts.py <dir with geist-500.ttf / geist-600.ttf> <out .c> <out .h>
+The typeface is Inter, the open design closest to Apple TV's SF Pro. Its variable font gives
+every weight below, and its optical-size axis follows the pixel size, as SF's does on tvOS.
+
+usage: make_fonts.py <InterVariable.ttf> <out .c> <out .h>
 """
 import sys
 from PIL import Image, ImageDraw, ImageFont
 
-TTF_DIR, OUT_C, OUT_H = sys.argv[1], sys.argv[2], sys.argv[3]
+TTF, OUT_C, OUT_H = sys.argv[1], sys.argv[2], sys.argv[3]
 
 ASCII = [chr(c) for c in range(0x20, 0x7F)]
 EXTRA = ["°", "·", "–", "—", "…"]
@@ -18,25 +21,25 @@ CAPS = [" "] + [chr(c) for c in range(ord("0"), ord("9") + 1)] + [chr(c) for c i
 
 # (name, weight, px, tracking in em, charset). Sizes/weights are lumen's CSS values.
 FONTS = [
-    ("geist_19m", 500, 19, -0.011, ASCII + EXTRA),   # cc__label
-    ("geist_19s", 600, 19, -0.015, ASCII + EXTRA),   # tile__label
-    ("geist_20m", 500, 20, -0.011, ASCII + EXTRA),   # pill__label
-    ("geist_21m", 500, 21, -0.011, ASCII + EXTRA),   # cc__sub
-    ("geist_21s", 600, 21, -0.011, ASCII + EXTRA),   # 1.1.4 cc__name, cc__slidertext
-    ("geist_20s", 600, 20, -0.011, ASCII + EXTRA),   # 1.1.4 cc__caption
-    ("geist_22m", 500, 22, -0.005, ASCII + EXTRA + LATIN1 + list("\u25c0\u25b6\u25b2\u25bc")),   # status__weather, cc__net, hints, toast
-    ("geist_24m", 500, 24, -0.011, ASCII + EXTRA),   # toast
-    ("geist_24s", 600, 24, -0.015, ASCII + EXTRA),   # panel tile label
-    ("geist_26s", 600, 26, -0.011, ASCII + EXTRA),   # cc__name, cc__slidertext
-    ("geist_26m", 500, 26, -0.011, ASCII + EXTRA + LATIN1),   # movehint, option values
-    ("geist_28m", 500, 28, -0.011, ASCII + EXTRA),   # menu__row
-    ("geist_30m", 500, 30, -0.012, ASCII + EXTRA),   # status date + clock
-    ("geist_30s", 600, 30, -0.020, ASCII + EXTRA),   # cc__title, panel__title, tabs
-    ("geist_32m", 500, 32, -0.012, ASCII + EXTRA + LATIN1),   # 1.1.4 .slist__row
-    ("geist_52s", 600, 52, -0.020, ASCII + EXTRA),   # 1.1.4 .slist__title
-    ("geist_44b", 700, 44, -0.020, ASCII + EXTRA),   # 1.1.4 .switcher__title
-    ("geist_34m", 500, 34, -0.011, ASCII + EXTRA),   # 1.1.4 .switcher__empty
-    ("geist_96b", 700, 96, 0.0, CAPS),               # 1.1.4 .switcher__art monogram
+    ("font_19m", 500, 19, -0.011, ASCII + EXTRA),   # cc__label
+    ("font_19s", 600, 19, -0.015, ASCII + EXTRA),   # tile__label
+    ("font_20m", 500, 20, -0.011, ASCII + EXTRA),   # pill__label
+    ("font_21m", 500, 21, -0.011, ASCII + EXTRA),   # cc__sub
+    ("font_21s", 600, 21, -0.011, ASCII + EXTRA),   # 1.1.4 cc__name, cc__slidertext
+    ("font_20s", 600, 20, -0.011, ASCII + EXTRA),   # 1.1.4 cc__caption
+    ("font_22m", 500, 22, -0.005, ASCII + EXTRA + LATIN1 + list("\u25c0\u25b6\u25b2\u25bc")),   # status__weather, cc__net, hints, toast
+    ("font_24m", 500, 24, -0.011, ASCII + EXTRA),   # toast
+    ("font_24s", 600, 24, -0.015, ASCII + EXTRA),   # panel tile label
+    ("font_26s", 600, 26, -0.011, ASCII + EXTRA),   # cc__name, cc__slidertext
+    ("font_26m", 500, 26, -0.011, ASCII + EXTRA + LATIN1),   # movehint, option values
+    ("font_28m", 500, 28, -0.011, ASCII + EXTRA),   # menu__row
+    ("font_30m", 500, 30, -0.012, ASCII + EXTRA),   # status date + clock
+    ("font_30s", 600, 30, -0.020, ASCII + EXTRA),   # cc__title, panel__title, tabs
+    ("font_32m", 500, 32, -0.012, ASCII + EXTRA + LATIN1),   # 1.1.4 .slist__row
+    ("font_52s", 600, 52, -0.020, ASCII + EXTRA),   # 1.1.4 .slist__title
+    ("font_44b", 700, 44, -0.020, ASCII + EXTRA),   # 1.1.4 .switcher__title
+    ("font_34m", 500, 34, -0.011, ASCII + EXTRA),   # 1.1.4 .switcher__empty
+    ("font_96b", 700, 96, 0.0, CAPS),               # 1.1.4 .switcher__art monogram
     # StandBy / photo saver (lumen 1.1.4 .sb__*, .ambient__*): only the glyphs each one shows
     ("sb_time", 800, 460, -0.045, list("0123456789:")),          # .sb__time 460/800
     ("sb_time_light", 300, 440, -0.040, list("0123456789:")),    # solar .sb__time--light 440/300
@@ -50,16 +53,16 @@ FONTS = [
     ("sb_wd", 600, 42, 0.0, list(" SMTWF")),                     # .sb__wd 42/600
     ("sb_place", 600, 48, -0.005, ASCII + LATIN1),               # .sb__place 48/600
     ("sb_sub", 500, 40, -0.005, ASCII + EXTRA + LATIN1),         # .sb__sub 40/500
-    ("geist_32n", 400, 32, 0.0, list(" AMP")),                   # .ambient clock__period 32/400
-    ("geist_64s", 600, 64, 0.0, CAPS),               # tile__monogram
+    ("font_32n", 400, 32, 0.0, list(" AMP")),                   # .ambient clock__period 32/400
+    ("font_64s", 600, 64, 0.0, CAPS),               # tile__monogram
     # Settings > Clock: weight Light/Bold of the one-row block, the Stacked layout's big time
-    ("geist_30l", 300, 30, -0.012, ASCII + EXTRA),   # clockw-light status date + clock
-    ("geist_30b", 700, 30, -0.012, ASCII + EXTRA),   # clockw-bold
+    ("font_30l", 300, 30, -0.012, ASCII + EXTRA),   # clockw-light status date + clock
+    ("font_30b", 700, 30, -0.012, ASCII + EXTRA),   # clockw-bold
     ("clk_104l", 300, 104, -0.010, list("0123456789: ")),        # clock-stacked .clock__time 104
     ("clk_104s", 600, 104, -0.010, list("0123456789: ")),        #   (600 is the stacked default)
     ("clk_104b", 700, 104, -0.010, list("0123456789: ")),
     ("clk_84s", 600, 84, -0.010, ASCII),                         # stacked .clock__sec / __date (.8em)
-    ("geist_36m", 500, 36, -0.012, list(" AMP")),                # stacked .clock__period 36
+    ("font_36m", 500, 36, -0.012, list(" AMP")),                # stacked .clock__period 36
 ]
 
 
@@ -81,7 +84,7 @@ def pack4(img):
 # Stem dilation as macOS applies it to light text (the UI text here is white on dark glass):
 # every outline edge moves out by d device pixels, d = min(px * (0.0058 + 0.01 * luminance), 0.3),
 # sideways on both sides and upward only, so the baseline stays put; advances are unchanged.
-# Without it white Geist reads thin on the TV. Glyphs are drawn SS times larger with a stroke of
+# Without it white text reads thin on the TV. Glyphs are drawn SS times larger with a stroke of
 # d * SS and box-filtered down, which gives exact area coverage instead of FreeType's hinted
 # 1x raster. All of it happens here: the bitmaps cost the same to draw at run time.
 SS = 10
@@ -92,10 +95,15 @@ def dilation(px):
     return min(px * (0.0058 + 0.01 * LUMINANCE), 0.3)
 
 
+def inter(weight, px, size):
+    f = ImageFont.truetype(TTF, size)
+    f.set_variation_by_axes([max(14, min(32, px)), weight])   # opsz 14..32, wght
+    return f
+
+
 def build(name, weight, px, track, chars):
-    path = f"{TTF_DIR}/geist-{weight if weight != 400 else 500}.ttf"
-    font = ImageFont.truetype(path, px)
-    big = ImageFont.truetype(path, px * SS)
+    font = inter(weight, px, px)
+    big = inter(weight, px, px * SS)   # the optical size of the real pixel size, not of the 10x master
     stroke = round(dilation(px) * SS)
     ascent, descent = font.getmetrics()
     chars = sorted(set(chars), key=ord)
@@ -125,7 +133,7 @@ def build(name, weight, px, track, chars):
     ulist = ", ".join(str(c - codes[0]) for c in codes)
     rows = [", ".join(f"0x{v:02x}" for v in bitmap[i:i + 24]) for i in range(0, len(bitmap), 24)]
     return f"""
-/* {name}: Geist {weight}, {px}px */
+/* {name}: Inter {weight}, {px}px */
 static const uint8_t {name}_bitmap[] = {{
     {(","+chr(10)+"    ").join(rows) or "0"}
 }};
@@ -153,7 +161,7 @@ const lv_font_t {name} = {{
 
 
 with open(OUT_C, "w") as f:
-    f.write("/* Generated by tools/make_fonts.py from lumen's Geist variable font. Do not edit. */\n")
+    f.write("/* Generated by tools/make_fonts.py from Inter (tools/InterVariable.ttf). Do not edit. */\n")
     f.write('#include "lvgl/lvgl.h"\n')
     for spec in FONTS:
         f.write(build(*spec))

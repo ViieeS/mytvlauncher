@@ -358,7 +358,7 @@ static void build_photos(lv_obj_t *p, bool embedded) {
     lv_obj_t *row = box(blk, 0, 0, 1000, 120);
     lv_opa_t to = sv.env.frosted ? 0x94 : LV_OPA_COVER;
     sv.ph_time = text(row, &sb_small, 0xffffff, to, "");
-    sv.ph_period = text(row, &geist_32n, 0xffffff, sv.env.frosted ? 0xb3 : LV_OPA_COVER, "");
+    sv.ph_period = text(row, &font_32n, 0xffffff, sv.env.frosted ? 0xb3 : LV_OPA_COVER, "");
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_set_style_pad_column(row, 10, 0);
@@ -369,9 +369,9 @@ static void build_photos(lv_obj_t *p, bool embedded) {
         sv.ph_wx_icon = sprite(wr, &wx_cloud, 0xffffff, 0xe6);
         lv_obj_set_style_img_recolor_opa(sv.ph_wx_icon, 0, 0);
         lv_obj_set_pos(sv.ph_wx_icon, 0, 2);
-        sv.ph_wx = text(wr, &geist_28m, 0xffffff, 0xe6, "");
+        sv.ph_wx = text(wr, &font_28m, 0xffffff, 0xe6, "");
         lv_obj_set_pos(sv.ph_wx, 35, 0);
-        sv.ph_date = text(blk, &geist_28m, 0xffffff, 0xd9, "");
+        sv.ph_date = text(blk, &font_28m, 0xffffff, 0xd9, "");
         lv_obj_set_pos(sv.ph_date, 0, y + 40);
     }
     int bh = y + (sv.env.info ? 80 : 0);
@@ -686,7 +686,7 @@ void standby_open(const saver_env_t *env, int face, int color) {
     /* .sb__hint: shown once, white .55 for 70 % of 6 s, then fades out */
     char h[96];
     snprintf(h, sizeof(h), "%s \xC2\xB7 \xE2\x97\x80 \xE2\x96\xB6 face \xC2\xB7 \xE2\x96\xB2 \xE2\x96\xBC colour \xC2\xB7 OK exit", FACE_NAMES[sv.face]);
-    sv.hint = centered(sv.root, &geist_22m, 0xffffff, 0x8c, h, H - 28 - lv_font_get_line_height(&geist_22m));
+    sv.hint = centered(sv.root, &font_22m, 0xffffff, 0x8c, h, H - 28 - lv_font_get_line_height(&font_22m));
     lv_anim_t an;
     lv_anim_init(&an);
     lv_anim_set_var(&an, sv.hint);
