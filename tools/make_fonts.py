@@ -78,22 +78,46 @@ def pack4(img):
     return out
 
 
+# Stem dilation as macOS applies it to light text (the UI text here is white on dark glass):
+# every outline edge moves out by d device pixels, d = min(px * (0.0058 + 0.01 * luminance), 0.3),
+# sideways on both sides and upward only, so the baseline stays put; advances are unchanged.
+# Without it white Geist reads thin on the TV. Glyphs are drawn SS times larger with a stroke of
+# d * SS and box-filtered down, which gives exact area coverage instead of FreeType's hinted
+# 1x raster. All of it happens here: the bitmaps cost the same to draw at run time.
+SS = 10
+LUMINANCE = 1.0
+
+
+def dilation(px):
+    return min(px * (0.0058 + 0.01 * LUMINANCE), 0.3)
+
+
 def build(name, weight, px, track, chars):
-    font = ImageFont.truetype(f"{TTF_DIR}/geist-{weight if weight != 400 else 500}.ttf", px)
+    path = f"{TTF_DIR}/geist-{weight if weight != 400 else 500}.ttf"
+    font = ImageFont.truetype(path, px)
+    big = ImageFont.truetype(path, px * SS)
+    stroke = round(dilation(px) * SS)
     ascent, descent = font.getmetrics()
     chars = sorted(set(chars), key=ord)
     bitmap, dscs = bytearray(), ["{.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}"]
     for ch in chars:
         adv = max(0, round((font.getlength(ch) + track * px) * 16))
         l, t, r, b = font.getbbox(ch, anchor="ls")
-        w, h = r - l, b - t
-        if w <= 0 or h <= 0:
+        if r - l <= 0 or b - t <= 0:
             dscs.append(f"{{.bitmap_index = {len(bitmap)}, .adv_w = {adv}, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}}")
             continue
-        img = Image.new("L", (w, h), 0)
-        ImageDraw.Draw(img).text((-l, -t), ch, font=font, fill=255, anchor="ls")
-        dscs.append(f"{{.bitmap_index = {len(bitmap)}, .adv_w = {adv}, .box_w = {w}, .box_h = {h}, "
-                    f".ofs_x = {l}, .ofs_y = {-b}}}")
+        # 2 px of margin: the dilation and the unhinted outline may reach past the 1x box
+        x0, y0, w, h = l - 2, t - 2, r - l + 4, b - t + 4
+        hi = Image.new("L", (w * SS, h * SS), 0)
+        # the stroke also grows the glyph downward by `stroke`: lift it by as much, so the bottom
+        # stays on the baseline and the top gains twice the dilation, as on macOS
+        ImageDraw.Draw(hi).text((-x0 * SS, -y0 * SS - stroke), ch, font=big, fill=255, anchor="ls",
+                                stroke_width=stroke, stroke_fill=255)
+        img = hi.resize((w, h), Image.BOX)
+        bl, bt, br, bb = img.getbbox()
+        img = img.crop((bl, bt, br, bb))
+        dscs.append(f"{{.bitmap_index = {len(bitmap)}, .adv_w = {adv}, .box_w = {br - bl}, .box_h = {bb - bt}, "
+                    f".ofs_x = {x0 + bl}, .ofs_y = {-(y0 + bb)}}}")
         bitmap += pack4(img)
 
     codes = [ord(c) for c in chars]
