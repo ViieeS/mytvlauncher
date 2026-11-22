@@ -73,11 +73,13 @@ power_phase() {
 }
 
 # bootd opens physicalLastSourceAppId from eim's lastinput after power-on, reading it at that moment
-# on a QuickStart+ wake and on a cold boot alike. Pointed at myTV for the standby, it makes bootd
-# open myTV itself, with no input on screen first. The rest of eim's record stays as it was.
+# on a QuickStart+ wake and on a cold boot alike. Pointed at myTV, it makes bootd open myTV itself,
+# with no input on screen first. The rest of eim's record stays as it was. eim records physical
+# sources only, so it leaves the field alone while an app is in front, and rewrites it on an input.
 point_lastinput_at_mytv() {
   [ -f "$LASTINPUT" ] || return
-  [ -f "$LASTINPUT_ORIG" ] || cp -p "$LASTINPUT" "$LASTINPUT_ORIG"
+  grep -q "\"physicalLastSourceAppId\":\"$APP_ID\"" "$LASTINPUT" && return
+  cp -p "$LASTINPUT" "$LASTINPUT_ORIG"   # eim's newest record, put back on an input
   sed -i "s/\"physicalLastSourceAppId\":\"[^\"]*\"/\"physicalLastSourceAppId\":\"$APP_ID\"/" "$LASTINPUT"
   sync
 }
@@ -87,6 +89,17 @@ restore_lastinput() {
   [ -f "$LASTINPUT_ORIG" ] || return
   grep -q "\"physicalLastSourceAppId\":\"$APP_ID\"" "$LASTINPUT" && cp -p "$LASTINPUT_ORIG" "$LASTINPUT" && sync
   rm -f "$LASTINPUT_ORIG"
+}
+
+# Held for as long as the user is in an app or LG Home, not just over a standby: a reboot or a power
+# cut skips standby, and bootd would show the input for the half minute before init.d starts this.
+# On an input, with the bypass on, or with no record of where the user is, eim's record stands.
+sync_lastinput() {
+  if [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg"; then
+    point_lastinput_at_mytv
+  else
+    restore_lastinput
+  fi
 }
 
 # SAM can list myTV as running under another app's pid with no myTV process at all (seen after
@@ -217,8 +230,6 @@ run() {
   # after the screen is on, so a boot start counts as coming out of standby.
   prev_phase=awake
   [ "$1" = boot ] && prev_phase=asleep
-  # a watcher stopped during standby left lastinput pointing at myTV
-  [ "$1" != boot ] && [ "$(power_phase)" = awake ] && restore_lastinput
   active_fg=$(cat "$LAST_FG" 2>/dev/null)
   watch_app_close &
   close_pid=$!
@@ -228,19 +239,19 @@ run() {
     fg=$(foreground)
 
     # Wake landing, decided from where we were before standby (active_fg). A real input (HDMI etc.)
-    # is left to bootd as usual. From an app or LG Home, bootd is told to open myTV instead, and on
-    # the wake the watcher launches myTV itself if bootd did not (a cold boot that skipped standby).
+    # is left to bootd as usual. From an app or LG Home, lastinput already tells bootd to open myTV,
+    # and on the wake the watcher launches myTV itself if bootd did not.
     if [ "$phase" = asleep ] && [ "$prev_phase" = awake ]; then
-      [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg" \
-        && { point_lastinput_at_mytv; log "standby: was in $active_fg, bootd opens myTV"; }
+      sync_lastinput   # once more: eim may have written its record on the way down
+      log "standby: was in $active_fg"
     elif [ "$phase" = awake ] && [ "$prev_phase" = asleep ]; then
-      restore_lastinput
       [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg" && [ "$fg" != "$APP_ID" ] \
         && { launch_mytv; log "wake: was in $active_fg, $fg in front -> myTV"; }
     elif [ "$phase" = awake ] && [ -n "$fg" ] && [ "$fg" != "$active_fg" ]; then
       active_fg=$fg           # steady awake: remember where we are, for the next wake
       echo "$fg" > "$LAST_FG"
     fi
+    [ "$phase" = awake ] && sync_lastinput
     [ -n "$phase" ] && prev_phase=$phase
 
     # After the wake landing: a hung injection can take INJECT_TIMEOUT, and the input shows meanwhile.
