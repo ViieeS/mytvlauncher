@@ -22,15 +22,11 @@ EXTRA = ["°", "·", "–", "—", "…"]
 LATIN1 = [chr(c) for c in range(0xC0, 0x100)]   # city names: Zürich, São Paulo
 CAPS = [" "] + [chr(c) for c in range(ord("0"), ord("9") + 1)] + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
 
-# (name, weight, px, tracking in em, charset). Sizes/weights are lumen's CSS values.
+# (name, weight, px, tracking in em, charset). Sizes/weights are lumen's CSS values, except that
+# no text is under tvOS's 23 px minimum: lumen's 19-22 px labels are 23 here.
 FONTS = [
-    ("font_19m", 500, 19, -0.011, ASCII + EXTRA),   # cc__label
-    ("font_19s", 600, 19, -0.015, ASCII + EXTRA),   # tile__label
-    ("font_20m", 500, 20, -0.011, ASCII + EXTRA),   # pill__label
-    ("font_21m", 500, 21, -0.011, ASCII + EXTRA),   # cc__sub
-    ("font_21s", 600, 21, -0.011, ASCII + EXTRA),   # 1.1.4 cc__name, cc__slidertext
-    ("font_20s", 600, 20, -0.011, ASCII + EXTRA),   # 1.1.4 cc__caption
-    ("font_22m", 500, 22, -0.005, ASCII + EXTRA + LATIN1 + list("\u25c0\u25b6\u25b2\u25bc")),   # status__weather, cc__net, hints, toast
+    ("font_23s", 600, 23, -0.015, ASCII + EXTRA),   # tile__label, cc__name, cc__caption (lumen 19-21)
+    ("font_23m", 500, 23, -0.008, ASCII + EXTRA + LATIN1 + list("◀▶▲▼")),   # pill__label, status__weather, hints (lumen 20-22)
     ("font_24m", 500, 24, -0.011, ASCII + EXTRA),   # toast
     ("font_24s", 600, 24, -0.015, ASCII + EXTRA),   # panel tile label
     ("font_26s", 600, 26, -0.011, ASCII + EXTRA),   # cc__name, cc__slidertext

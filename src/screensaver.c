@@ -686,7 +686,7 @@ void standby_open(const saver_env_t *env, int face, int color) {
     /* .sb__hint: shown once, white .55 for 70 % of 6 s, then fades out */
     char h[96];
     snprintf(h, sizeof(h), "%s \xC2\xB7 \xE2\x97\x80 \xE2\x96\xB6 face \xC2\xB7 \xE2\x96\xB2 \xE2\x96\xBC colour \xC2\xB7 OK exit", FACE_NAMES[sv.face]);
-    sv.hint = centered(sv.root, &font_22m, 0xffffff, 0x8c, h, H - 28 - lv_font_get_line_height(&font_22m));
+    sv.hint = centered(sv.root, &font_23m, 0xffffff, 0x8c, h, H - 28 - lv_font_get_line_height(&font_23m));
     lv_anim_t an;
     lv_anim_init(&an);
     lv_anim_set_var(&an, sv.hint);

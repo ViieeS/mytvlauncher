@@ -53,7 +53,7 @@ static FILE *lg;
 #define TILE_STEP (TILE_W + TILE_GAP)
 #define ROW_VIEW_W (SCR_W - 2 * EDGE)   /* It: a row scrolls once it is wider than this */
 #define ROWS_TOP 846              /* se.rowsTop: top of the first row's tiles */
-#define ROW_PITCH 264             /* tile + label block (26 + 19*2.4) + rowGap 40 + 10 */
+#define ROW_PITCH 264             /* tile 142 + label 26 + two 29 px lines + 38 to the next row */
 #define LOWER_SHIFT 300           /* .rows--lower */
 static const int FOCUS_ZOOMS[3] = { 277, 297, 323 };   /* focusStrength subtle 1.08 / normal 1.16 / strong 1.26 */
 #define FOCUS_LIFT 6
@@ -82,6 +82,7 @@ static const int FOCUS_ZOOMS[3] = { 277, 297, 323 };   /* focusStrength subtle 1
 #define CC_U 90
 #define CC_GAP 18
 #define CC_W (4 * CC_U + 3 * CC_GAP)
+#define CC_GRID_H (4 * (CC_U + CC_GAP) + 32)   /* four rows and the 29 px caption line under them */
 #define CC_X (SCR_W - EDGE - CC_W)
 #define CC_Y 150
 #define CC_ON 0x40c4ff                      /* --cc-on: rgb(64, 196, 255) */
@@ -1883,11 +1884,12 @@ static void row_fill(int ri, int kind, const ref_t *items, int n) {
         lv_obj_set_style_opa(d, 0, 0);
         R->dot[i] = d;
     }
-    /* .tile__label: under the focused tile, 19px/600, two lines, centred on the tile + gap */
-    R->label = label(R->track, &font_19s, C_TEXT, "");
+    /* .tile__label: under the focused tile, 23px/600 (lumen 19, tvOS minimum 23), two lines,
+     * centred on the tile + gap */
+    R->label = label(R->track, &font_23s, C_TEXT, "");
     lv_obj_set_width(R->label, TILE_W + TILE_GAP - 8);
     lv_label_set_long_mode(R->label, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(R->label, lv_font_get_line_height(&font_19s) * 2);
+    lv_obj_set_height(R->label, lv_font_get_line_height(&font_23s) * 2);
     lv_obj_set_style_text_align(R->label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_opa(R->label, 0, 0);
     lv_obj_set_width(R->track, row_width(R) > 0 ? row_width(R) : 1);
@@ -2497,14 +2499,20 @@ static void cc_tile(lv_obj_t *grid, int id, const lv_img_dsc_t *ic, const char *
     int x, y, w;
     cc_rect(id, &x, &y, &w);
     lv_obj_t *m = cc_module(grid, x, y, w, CC_U, 282, TAG(Z_CC, 0, id), &cc.glass[id]);
-    /* .cc__tile: padding 0 14px 0 20px; 40px glyph, 14px gap; name 21/600, sub 21 .7 */
+    /* .cc__tile: padding 0 14px 0 20px; 40px glyph, 14px gap; name 23/600, sub 23 .7 (lumen 21;
+     * tvOS keeps 23 px in its half-width modules and lets a long value run out, here with dots) */
     cc.icon[id] = cc_glyph(m, ic);
     lv_obj_align(cc.icon[id], LV_ALIGN_LEFT_MID, 20, 0);
-    int lh = 25, ty = (CC_U - 2 * lh) / 2;
-    lv_obj_set_pos(label(m, &font_21s, 0xFFFFFF, name), 20 + 40 + 14, ty);
-    cc.sub[id] = label(m, &font_21m, 0xFFFFFF, "");
+    int lh = lv_font_get_line_height(&font_23m), tx = 20 + 40 + 14, ty = (CC_U - 2 * lh) / 2;
+    lv_obj_t *n = label(m, &font_23s, 0xFFFFFF, name);
+    cc.sub[id] = label(m, &font_23m, 0xFFFFFF, "");
     lv_obj_set_style_text_opa(cc.sub[id], 0xb3, 0);
-    lv_obj_set_pos(cc.sub[id], 20 + 40 + 14, ty + lh);
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *l = i ? cc.sub[id] : n;
+        lv_obj_set_size(l, w - tx - 14, lh);              /* a fixed height makes LONG_DOT cut, not wrap */
+        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+        lv_obj_set_pos(l, tx, ty + i * lh);
+    }
     cc.mod[id] = m;
 }
 
@@ -2518,7 +2526,7 @@ static void cc_circle(lv_obj_t *grid, int id, const lv_img_dsc_t *ic) {
 }
 
 static void cc_build_grid(lv_obj_t *p) {
-    cc.grid = group(p, 0, 0, CC_W, 4 * (CC_U + CC_GAP) + 30, 60);
+    cc.grid = group(p, 0, 0, CC_W, CC_GRID_H, 60);
     cc_tile(cc.grid, CC_SOUND, &ic_speaker_40, "Sound");
     cc_tile(cc.grid, CC_PICTURE, &ic_picture_40, "Picture");
     cc_tile(cc.grid, CC_SLEEP, &ic_power_40, "Sleep timer");
@@ -2539,12 +2547,12 @@ static void cc_build_grid(lv_obj_t *p) {
     lv_obj_set_style_bg_opa(cc.fill, 0x6a, LV_STATE_FOCUSED);
     cc.icon[CC_BACKLIGHT] = cc_glyph(s, &ic_sun_34);
     lv_obj_align(cc.icon[CC_BACKLIGHT], LV_ALIGN_LEFT_MID, 22, 0);
-    lv_obj_align(label(s, &font_21s, 0xFFFFFF, "Backlight"), LV_ALIGN_LEFT_MID, 22 + 34 + 12, 0);
-    cc.num = label(s, &font_21m, 0xFFFFFF, "");
+    lv_obj_align(label(s, &font_23s, 0xFFFFFF, "Backlight"), LV_ALIGN_LEFT_MID, 22 + 34 + 12, 0);
+    cc.num = label(s, &font_23m, 0xFFFFFF, "");
     lv_obj_align(cc.num, LV_ALIGN_RIGHT_MID, -26, 0);
     cc.mod[CC_BACKLIGHT] = s;
 
-    cc.caption = label(cc.grid, &font_20s, 0xFFFFFF, "");
+    cc.caption = label(cc.grid, &font_23s, 0xFFFFFF, "");
     lv_obj_set_width(cc.caption, CC_W);
     lv_obj_set_style_text_align(cc.caption, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_pos(cc.caption, 0, 4 * (CC_U + CC_GAP) + 2);
@@ -2584,7 +2592,7 @@ static void cc_list_open(int cell) {
         cc.opt_icon[i] = cc_glyph(o, ICONS[cell]);
         lv_obj_set_style_img_recolor_opa(cc.opt_icon[i], i == cc_opt_current(cell) ? LV_OPA_COVER : 0, 0);
         lv_obj_align(cc.opt_icon[i], LV_ALIGN_LEFT_MID, 20, 0);
-        lv_obj_align(label(o, &font_21s, 0xFFFFFF, labels[i]), LV_ALIGN_LEFT_MID, 20 + 34 + 14, 0);
+        lv_obj_align(label(o, &font_23s, 0xFFFFFF, labels[i]), LV_ALIGN_LEFT_MID, 20 + 34 + 14, 0);
         cc.opt[i] = o;
     }
     cc.listing = true;
@@ -2613,7 +2621,7 @@ static void cc_list_close(bool apply) {
 }
 
 static void open_cc(void) {
-    lv_obj_t *p = overlay_open(-1, CC_W, 4 * (CC_U + CC_GAP) + 30);
+    lv_obj_t *p = overlay_open(-1, CC_W, CC_GRID_H);
     memset(&cc, 0, sizeof(cc));
     cc_build_grid(p);
     ui.zone = Z_CC;
@@ -3381,13 +3389,13 @@ static lv_obj_t *check_badge(lv_obj_t *parent, int x, int size) {
     return b;
 }
 
-/* .settings__hint: centred, 22px at .55, in the 72px head */
+/* .settings__hint: centred, 23px (lumen 22) at .55, in the 72px head */
 static void page_hint(const char *text) {
-    lv_obj_t *h = label(set_page, &font_22m, 0xFFFFFF, text);
+    lv_obj_t *h = label(set_page, &font_23m, 0xFFFFFF, text);
     lv_obj_set_style_text_opa(h, 0x8c, 0);
     lv_obj_set_width(h, SCR_W);
     lv_obj_set_style_text_align(h, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(h, 0, 84 + (72 - lv_font_get_line_height(&font_22m)) / 2);
+    lv_obj_set_pos(h, 0, 84 + (72 - lv_font_get_line_height(&font_23m)) / 2);
 }
 
 static void fill_grid(void) {
@@ -3406,7 +3414,7 @@ static void fill_grid(void) {
         set_tile_state(i);
     }
     track_fit(720, 16 + (set_n + 5) / 6 * 242);
-    set_label = label(set_track, &font_19s, C_TEXT, "");
+    set_label = label(set_track, &font_23s, C_TEXT, "");
     lv_obj_set_width(set_label, TILE_W + TILE_GAP - 8);
     lv_obj_set_style_text_align(set_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_opa(set_label, 0, 0);
@@ -3429,7 +3437,7 @@ static void grid_toggle(int i) {
 
 #define WP_ITEMS (1 + WP_COUNT)
 #define WP_ITEM_DX 427                     /* 360 + 66.67 */
-#define WP_ITEM_DY 273
+#define WP_ITEM_DY 283                     /* thumb 203 + 14 + two 29 px title lines + 8 */
 static lv_obj_t *wp_ticks[WP_ITEMS], *wp_titles[WP_ITEMS];
 
 static void wp_ticks_update(void) {
@@ -3443,8 +3451,8 @@ static void fill_wallpaper(void) {
     page_hint("Left and right change category \xC2\xB7 OK sets the wallpaper \xC2\xB7 Back returns");
     int top = 84 + 72 + 18;
     /* .wp__chip--on: the only category natively (the cloud ones need https) */
-    set_chip = box(set_page, EDGE, top, lv_txt_get_width("Defaults", 8, &font_22m, 0, 0) + 52, lv_font_get_line_height(&font_22m) + 20);
-    lv_obj_t *cl = label(set_chip, &font_22m, C_TEXT, "Defaults");
+    set_chip = box(set_page, EDGE, top, lv_txt_get_width("Defaults", 8, &font_23m, 0, 0) + 52, lv_font_get_line_height(&font_23m) + 20);
+    lv_obj_t *cl = label(set_chip, &font_23m, C_TEXT, "Defaults");
     lv_obj_center(cl);
     lv_obj_set_style_radius(set_chip, 999, 0);
     lv_obj_set_style_bg_color(set_chip, lv_color_white(), 0);
@@ -3482,8 +3490,8 @@ static void fill_wallpaper(void) {
             lv_obj_center(label(t, &font_28m, 0xAAAAAA, c < 0 ? "Select all" : "..."));
         }
         wp_ticks[i] = check_badge(t, 360 - 12 - 38, 38);
-        lv_obj_t *l = label(set_track, &font_20m, 0xAAAAAA, c < 0 ? "Select all" : T[c]);
-        lv_obj_set_width(l, 360);
+        lv_obj_t *l = label(set_track, &font_23m, 0xAAAAAA, c < 0 ? "Select all" : T[c]);
+        lv_obj_set_size(l, 360, 2 * lv_font_get_line_height(&font_23m));
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
         lv_obj_set_pos(l, x, y + 203 + 14);
         wp_titles[i] = l;
@@ -4516,12 +4524,12 @@ static void status_build(void) {
     }
     lv_obj_set_style_text_opa(clk_date, look, 0);
 
-    /* .status__weather: 22px/500 at .82 led by the .wicon glyph (10px gap); 28px when stacked */
+    /* .status__weather: 23px/500 (lumen 22) at .82 led by the .wicon glyph (10px gap); 28px when stacked */
     status_wx = flex_box(status_cont, LV_FLEX_FLOW_ROW, LV_FLEX_ALIGN_CENTER, 10);
     if (stacked) lv_obj_set_style_pad_left(status_wx, 4, 0);
     status_wx_icon = image(status_wx, &wx_cloud);
     lv_obj_set_style_img_opa(status_wx_icon, 0xd1, 0);
-    status_wx_text = label(status_wx, stacked ? &font_28m : &font_22m, C_TEXT, "");
+    status_wx_text = label(status_wx, stacked ? &font_28m : &font_23m, C_TEXT, "");
     lv_obj_set_style_text_opa(status_wx_text, 0xd1, 0);
     pthread_mutex_lock(&wx_mtx);
     status_wx_set(wx_text);
@@ -4616,7 +4624,7 @@ static void build_ui(void) {
         rows[r].track = group(rows[r].cont, 0, 0, 1, ROW_PITCH, 80);
         rows[r].shown = r == 0;
         if (r) lv_obj_set_style_opa(rows[r].cont, 0, 0);
-        rows[r].label = label(rows[r].track, &font_19s, C_TEXT, "");
+        rows[r].label = label(rows[r].track, &font_23s, C_TEXT, "");
     }
 
     status_build();
@@ -4628,7 +4636,7 @@ static void build_ui(void) {
         pill_icon[p] = icon(scr, p == 0 ? &ic_inputs_28 : &ic_sliders_28);
         lv_obj_set_pos(pill_icon[p], PILL_X[p] + (PILL - 28) / 2, PILL_Y + (PILL - 28) / 2);
         lv_img_set_pivot(pill_icon[p], 14, 14);
-        topbar_lbl[p] = label(scr, &font_20m, C_TEXT, names[p]);
+        topbar_lbl[p] = label(scr, &font_23m, C_TEXT, names[p]);
         lv_obj_update_layout(topbar_lbl[p]);
         /* centred under its pill; the last pill's label ends at the pill's right edge */
         int lx = p == 1 ? PILL_X[p] + PILL - lv_obj_get_width(topbar_lbl[p]) : PILL_X[p] + PILL / 2 - lv_obj_get_width(topbar_lbl[p]) / 2;

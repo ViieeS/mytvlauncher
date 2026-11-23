@@ -21,6 +21,9 @@ All notable changes to this project are documented here. The format follows
 - The typeface is Inter instead of Geist, in the UI and the app icon. Inter is the open design
   closest to Apple TV's SF Pro, and its optical sizes follow the text size.
 - All digits are the same width, so the clocks no longer shift sideways when a digit changes.
+- No text is smaller than 23 px, Apple TV's minimum: tile names, top bar labels, the weather,
+  hints and Control Center were 19 to 22 px. A Control Center value too long for its module ends
+  with an ellipsis.
 
 ## [1.1.0] - 2026-11-22
 
