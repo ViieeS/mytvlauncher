@@ -56,9 +56,10 @@ bool glass_render(glass_img_t *out, const glass_src_t *src, int x, int y, int w,
  * LVGL draws itself (control-centre tiles, circles, slider). */
 bool glass_rim(lv_img_dsc_t *out, int w, int h, int r, uint8_t rim_tl, uint8_t rim_br);
 
-/* lumen's focus sheen on a tile: linear-gradient(115deg, #fff .36, .10 @28 %, 0 @46 %),
- * clipped to the tile's rounded rect. */
-bool glass_sheen(lv_img_dsc_t *out, int w, int h, int r);
+/* The specular glint of a focused tile (tvOS): a d x d white spot, gaussian falloff from alpha
+ * `peak` at the centre to ~0 at the edge. It slides inside the tile, so it carries no tile mask:
+ * the caller keeps it far enough from the corners that the falloff hides them. */
+bool glass_glint(lv_img_dsc_t *out, int d, uint8_t peak);
 
 /* Multiply a BGRA image's alpha by a rounded-rect mask of radius r (antialiased edge). */
 void glass_round_alpha(uint8_t *bgra, int w, int h, float r);

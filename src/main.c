@@ -58,6 +58,9 @@ static FILE *lg;
 static const int FOCUS_ZOOMS[3] = { 277, 297, 323 };   /* focusStrength subtle 1.08 / normal 1.16 / strong 1.26 */
 #define FOCUS_LIFT 6
 #define FOCUS_MS 160              /* Un.focusMs */
+#define PRESS_MS 90               /* tvOS highlighted state: OK sinks the focused tile */
+#define PRESS_PCT 95
+#define PRESS_MIN_MS 120          /* a tap still shows the press for this long */
 #define UNFOCUSED_OPA 153         /* Un.unfocusedRowOpacity .6 */
 #define LONG_PRESS_MS 600         /* rt.longPressMs */
 #define KEY_REPEAT_MS 90
@@ -668,7 +671,111 @@ static void chase_step(lv_timer_t *tm) {
     c->cb(c->obj, (int32_t) lroundf(c->pos));
 }
 
+/* ---- focus sway (tvOS): the focused tile's specular glint follows the Magic Remote pointer;
+ * with the arrow keys it slides in from the side focus came from. The tile and its icon stay put:
+ * translates are whole pixels, and a few pixels of travel read as a tremble. Only the glint's
+ * translate changes: it is one shared texture, never re-rendered. Its travel keeps it ~75 px from
+ * the tile's corners, where its falloff is under 4 % white, so it needs no rounded mask (a mask is
+ * a texture built per frame on the TV). */
+#define GLINT_D 220
+#define GLINT_PEAK 0x48
+#define GLINT_DX 40               /* glint travel at full lean */
+#define GLINT_DY 12
+#define GLINT_Y0 (-14)            /* rest: a little above the centre, light from above */
+#define SWAY_W 0.012f             /* softer than the scroll spring: settles in ~350 ms */
+#define GLINT_TAG ((void *) &glint_img)
+static lv_img_dsc_t glint_img;
+static struct {
+    lv_obj_t *tile;
+    float x, y, vx, vy, tx, ty, tf;   /* glint offset in -1..1 per axis, its target, the spring's clock */
+    lv_timer_t *tm;
+} sway;
+
+static lv_obj_t *glint_of(lv_obj_t *o) {
+    uint32_t n = o ? lv_obj_get_child_cnt(o) : 0;
+    for (uint32_t i = 0; i < n; i++) if (lv_obj_get_user_data(lv_obj_get_child(o, i)) == GLINT_TAG) return lv_obj_get_child(o, i);
+    return NULL;
+}
+
+/* Every style set redraws the tile's zoomed layer, so the spring's sub-pixel tail sets nothing. */
+static void sway_place(lv_obj_t *t, float x, float y) {
+    lv_obj_t *g = glint_of(t);
+    lv_coord_t gx = (lv_coord_t) lroundf(x * GLINT_DX), gy = (lv_coord_t) lroundf(GLINT_Y0 + y * GLINT_DY);
+    if (lv_obj_get_style_translate_x(g, 0) != gx) lv_obj_set_style_translate_x(g, gx, 0);
+    if (lv_obj_get_style_translate_y(g, 0) != gy) lv_obj_set_style_translate_y(g, gy, 0);
+}
+
+static void sway_stop(void) {
+    if (sway.tm) lv_timer_del(sway.tm);
+    sway.tm = NULL;
+}
+
+static void sway_step(lv_timer_t *tm) {
+    if (!sway.tile || !lv_obj_is_valid(sway.tile)) { sway.tile = NULL; sway_stop(); return; }
+    uint32_t now = SDL_GetTicks();
+    long frames = lroundf(((float) now - sway.tf) / FRAME_MS);
+    if (frames < 1) frames = 1;
+    sway.tf += (float) frames * FRAME_MS;
+    for (float ms = (float) frames * FRAME_MS; ms > 0.0f; ) {
+        float h = ms < 4.0f ? ms : 4.0f;
+        sway.vx += (SWAY_W * SWAY_W * (sway.tx - sway.x) - 2.0f * SWAY_W * sway.vx) * h;
+        sway.vy += (SWAY_W * SWAY_W * (sway.ty - sway.y) - 2.0f * SWAY_W * sway.vy) * h;
+        sway.x += sway.vx * h;
+        sway.y += sway.vy * h;
+        ms -= h;
+    }
+    if (fabsf(sway.tx - sway.x) < 0.01f && fabsf(sway.ty - sway.y) < 0.01f && fabsf(sway.vx) + fabsf(sway.vy) < 0.0005f) {
+        sway.x = sway.tx; sway.y = sway.ty;
+        sway_stop();
+    }
+    sway_place(sway.tile, sway.x, sway.y);
+}
+
+static void sway_to(float tx, float ty) {
+    if (!sway.tile) return;
+    sway.tx = tx; sway.ty = ty;
+    if (motion_off) { sway.x = tx; sway.y = ty; sway_stop(); sway_place(sway.tile, tx, ty); return; }
+    if (sway.tm || (sway.x == tx && sway.y == ty && !sway.vx && !sway.vy)) return;
+    sway.tf = (float) SDL_GetTicks();
+    sway.tm = lv_timer_create(sway_step, LV_DISP_DEF_REFR_PERIOD, NULL);
+}
+
+/* Focus moved from `from` to `to`: the old tile's glint goes back to rest, the new one's starts
+ * on the side focus came from and settles. */
+static void sway_focus(lv_obj_t *from, lv_obj_t *to) {
+    if (sway.tile && lv_obj_is_valid(sway.tile)) sway_place(sway.tile, 0, 0);
+    sway_stop();
+    sway.tile = glint_of(to) ? to : NULL;
+    sway.x = sway.y = sway.vx = sway.vy = 0;
+    if (!sway.tile) return;
+    if (from && lv_obj_is_valid(from) && !motion_off) {
+        lv_area_t a, b;
+        lv_obj_get_coords(from, &a);
+        lv_obj_get_coords(to, &b);
+        int dx = b.x1 - a.x1, dy = b.y1 - a.y1;
+        if (abs(dx) >= abs(dy) && dx) sway.x = dx > 0 ? -1.0f : 1.0f;
+        else if (dy) sway.y = dy > 0 ? -1.0f : 1.0f;
+    }
+    sway_place(sway.tile, sway.x, sway.y);
+    sway_to(0, 0);
+}
+
+/* The pointer over the focused tile places its glint; anywhere else lets it settle. A move worth
+ * under a pixel of glint travel is the gyro's jitter of a resting hand: it would keep the spring,
+ * and so the vsync-paced loop, running for no visible change. */
+static void sway_pointer(int x, int y) {
+    if (!sway.tile || !lv_obj_is_valid(sway.tile)) return;
+    lv_area_t a;
+    lv_obj_get_coords(sway.tile, &a);
+    float hw = (a.x2 - a.x1 + 1) * 0.5f, hh = (a.y2 - a.y1 + 1) * 0.5f;
+    float nx = (x - (a.x1 + hw)) / hw, ny = (y - (a.y1 + hh)) / hh;
+    if (fabsf(nx) > 1.0f || fabsf(ny) > 1.0f) nx = ny = 0;
+    if (!sway.tm && fabsf(nx - sway.tx) * GLINT_DX < 1.0f && fabsf(ny - sway.ty) * GLINT_DY < 1.0f) return;
+    sway_to(nx, ny);
+}
+
 static bool scrolling(void) {
+    if (sway.tm) return true;
     for (int i = 0; i < COUNT(chases); i++) if (chases[i].tm) return true;
     return false;
 }
@@ -678,6 +785,7 @@ static bool scrolling(void) {
  * timers presented 8-24 ms apart instead: the compositor showed some steps twice and dropped others. */
 static bool scroll_frame_due(void) {
     if (!scrolling()) return false;
+    if (sway.tm) lv_timer_ready(sway.tm);
     for (int i = 0; i < COUNT(chases); i++) if (chases[i].tm) lv_timer_ready(chases[i].tm);
     lv_timer_ready(lv_disp_get_default()->refr_timer);
     return true;
@@ -1472,19 +1580,19 @@ static void icons_copied(void) {
 
 /* ================================================================ styles */
 
-static lv_style_t st_tile, st_tile_f, st_ptile, st_ptile_f, st_cc, st_cc_f, st_sheen, st_sheen_f;
-static lv_img_dsc_t sheen_tile;
+static lv_style_t st_tile, st_tile_f, st_tile_p, st_ptile, st_ptile_f, st_cc, st_cc_f, st_glint, st_glint_f;
 
 /* Focus zoom/lift transition shared by every focusable; Reduce motion sets its time to 0. */
-static lv_style_transition_dsc_t st_tr;
+static lv_style_transition_dsc_t st_tr, st_tr_press;
 
 static void styles_init(void) {
     static const lv_style_prop_t props[] = { LV_STYLE_TRANSFORM_ZOOM, LV_STYLE_TRANSLATE_Y, 0 };
     lv_style_transition_dsc_init(&st_tr, props, lv_anim_path_ease_out, FOCUS_MS, 0, NULL);
-    glass_sheen(&sheen_tile, TILE_W, TILE_H, TILE_R);
+    lv_style_transition_dsc_init(&st_tr_press, props, lv_anim_path_ease_out, PRESS_MS, 0, NULL);
+    glass_glint(&glint_img, GLINT_D, GLINT_PEAK);
 
     /* .tile__box: --color-tile-bg unless the app has a colour; focus = scale 1.16, lift 6px,
-     * 0 22px 34px #00000073 and the 115deg sheen. The shadow is static per state (an animated
+     * 0 22px 34px #00000073 and the glint. The shadow is static per state (an animated
      * blur would be a fresh shadow-cache key every frame). */
     lv_style_init(&st_tile);
     lv_style_set_radius(&st_tile, TILE_R);
@@ -1500,6 +1608,14 @@ static void styles_init(void) {
     lv_style_set_shadow_width(&st_tile_f, 34);
     lv_style_set_shadow_ofs_y(&st_tile_f, 22);
     lv_style_set_shadow_opa(&st_tile_f, 0x73);
+    /* Pressed (tvOS highlighted state): the focused tile sinks back while OK is held, quickly. */
+    lv_style_init(&st_tile_p);
+    lv_style_set_transform_zoom(&st_tile_p, FOCUS_ZOOMS[1] * PRESS_PCT / 100);
+    lv_style_set_translate_y(&st_tile_p, 0);
+    lv_style_set_shadow_width(&st_tile_p, 18);
+    lv_style_set_shadow_ofs_y(&st_tile_p, 8);
+    lv_style_set_shadow_opa(&st_tile_p, 0x59);
+    lv_style_set_transition(&st_tile_p, &st_tr_press);
 
     /* .panel .tile: same box at 200x120 r24; focus adds a 4px white ring, 0 14px 24px #00000059 */
     lv_style_init(&st_ptile);
@@ -1520,13 +1636,13 @@ static void styles_init(void) {
     lv_style_set_shadow_ofs_y(&st_ptile_f, 14);
     lv_style_set_shadow_opa(&st_ptile_f, 0x59);
 
-    /* The sheen is an overlay above the icon, on the rows below the dock only. A child image, not
-     * the tile's bg_img: under the tile's radius LVGL draws a bg image through a corner mask whose
-     * texture it builds mid-frame on a cache miss, and that frame showed a grey block. */
-    lv_style_init(&st_sheen);
-    lv_style_set_img_opa(&st_sheen, LV_OPA_TRANSP);
-    lv_style_init(&st_sheen_f);
-    lv_style_set_img_opa(&st_sheen_f, LV_OPA_COVER);
+    /* The glint is a child image above the icon, shown on the focused tile only. Not the tile's
+     * bg_img: under the tile's radius LVGL draws a bg image through a corner mask whose texture it
+     * builds mid-frame on a cache miss, and that frame showed a grey block. */
+    lv_style_init(&st_glint);
+    lv_style_set_img_opa(&st_glint, LV_OPA_TRANSP);
+    lv_style_init(&st_glint_f);
+    lv_style_set_img_opa(&st_glint_f, LV_OPA_COVER);
 
     /* control centre surfaces: #1c223057 with inset rims; focus = solid white, text #111 */
     lv_style_init(&st_cc);
@@ -1544,6 +1660,7 @@ static void styles_init(void) {
 static void styles_focus_apply(void) {
     int z = FOCUS_ZOOMS[prefs.focus];
     lv_style_set_transform_zoom(&st_tile_f, z);
+    lv_style_set_transform_zoom(&st_tile_p, z * PRESS_PCT / 100);
     lv_style_set_transform_zoom(&st_ptile_f, z);
     lv_style_set_shadow_width(&st_tile_f, prefs.focus == 0 ? 24 : 34);
     lv_style_set_shadow_ofs_y(&st_tile_f, prefs.focus == 0 ? 14 : 22);
@@ -1604,11 +1721,52 @@ static void show_toast(const char *msg, bool error) {
     toast_until = SDL_GetTicks() + TOAST_MS;
 }
 
+/* The tile a context menu was opened over keeps its focused look under the menu, as on tvOS:
+ * dropping it shrank the tile behind the menu and popped it back out when the menu closed. */
+static lv_obj_t *menu_tile;
+
 static void focus_obj(lv_obj_t *o) {
     if (focused == o) return;
-    if (focused) set_state_tree(focused, LV_STATE_FOCUSED, false);
+    if (ui.zone == Z_CTX && !menu_tile && glint_of(focused)) menu_tile = focused;
+    else if (focused) set_state_tree(focused, LV_STATE_FOCUSED, false);
+    if (ui.zone != Z_CTX && menu_tile) {
+        if (menu_tile != o && lv_obj_is_valid(menu_tile)) set_state_tree(menu_tile, LV_STATE_FOCUSED, false);
+        menu_tile = NULL;
+    }
+    sway_focus(focused, o);
     focused = o;
     if (o) set_state_tree(o, LV_STATE_FOCUSED, true);
+}
+
+/* The pressed look follows OK held on a focused row tile. The down event starts it, so a tap
+ * whose release comes in the same event batch still shows it for PRESS_MIN_MS, released by a
+ * one-shot timer so an idle loop cannot strand it. */
+static lv_obj_t *pressed_tile;
+static uint32_t pressed_at;
+static lv_timer_t *press_timer;
+
+static void press_clear(lv_timer_t *tm) {
+    if (tm) press_timer = NULL;   /* a one-shot timer deletes itself */
+    if (pressed_tile && lv_obj_is_valid(pressed_tile)) lv_obj_clear_state(pressed_tile, LV_STATE_PRESSED);
+    pressed_tile = NULL;
+}
+
+static void press_sync(bool held) {
+    lv_obj_t *t = held && glint_of(focused) ? focused : NULL;
+    if (t == pressed_tile) return;
+    if (t) {
+        if (press_timer) { lv_timer_del(press_timer); press_timer = NULL; }
+        press_clear(NULL);
+        pressed_tile = t;
+        pressed_at = SDL_GetTicks();
+        lv_obj_add_state(t, LV_STATE_PRESSED);
+        return;
+    }
+    if (press_timer) return;
+    uint32_t shown = SDL_GetTicks() - pressed_at;
+    if (shown >= PRESS_MIN_MS || motion_off) { press_clear(NULL); return; }
+    press_timer = lv_timer_create(press_clear, PRESS_MIN_MS - shown, NULL);
+    lv_timer_set_repeat_count(press_timer, 1);
 }
 
 /* Call before deleting `root`. Only a focus inside it is forgotten: a focus outside (the tile a
@@ -1616,7 +1774,7 @@ static void focus_obj(lv_obj_t *o) {
  * tile stays zoomed next to the new one. */
 static void focus_forget(lv_obj_t *root) {
     for (lv_obj_t *o = focused; o; o = lv_obj_get_parent(o))
-        if (o == root) { focused = NULL; return; }
+        if (o == root) { focused = NULL; sway_focus(NULL, NULL); return; }
 }
 
 /* ================================================================ tiles */
@@ -1640,6 +1798,7 @@ static lv_obj_t *make_tile(lv_obj_t *parent, ref_t r, int x, int y, bool small, 
     lv_obj_t *t = box(parent, x, y, w, h);
     lv_obj_add_style(t, small ? &st_ptile : &st_tile, 0);
     lv_obj_add_style(t, small ? &st_ptile_f : &st_tile_f, LV_STATE_FOCUSED);
+    if (!small) lv_obj_add_style(t, &st_tile_p, LV_STATE_FOCUSED | LV_STATE_PRESSED);
     lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_user_data(t, tag);
     if (r.kind == IT_APP) {
@@ -1666,6 +1825,14 @@ static lv_obj_t *make_tile(lv_obj_t *parent, ref_t r, int x, int y, bool small, 
         lv_obj_t *i = image(t, &ic_inputs_76);
         lv_obj_set_style_img_opa(i, 0xd0, 0);
         lv_obj_center(i);
+    }
+    if (!small) {   /* last child: the glint lies over the icon */
+        lv_obj_t *g = image(t, &glint_img);
+        lv_obj_set_user_data(g, GLINT_TAG);
+        lv_obj_add_style(g, &st_glint, 0);
+        lv_obj_add_style(g, &st_glint_f, LV_STATE_FOCUSED);
+        lv_obj_center(g);
+        lv_obj_set_style_translate_y(g, GLINT_Y0, 0);
     }
     return t;
 }
@@ -1706,11 +1873,6 @@ static void row_fill(int ri, int kind, const ref_t *items, int n) {
     for (int i = 0; i < n; i++) {
         R->it[i] = items[i];
         R->obj[i] = make_tile(R->track, items[i], i * TILE_STEP, 0, false, TAG(Z_ROWS, ri, i));
-        if (R->kind != 0) {    /* lumen .row:not(.row--dock) .tile--focused .tile__box:after */
-            lv_obj_t *sh = image(R->obj[i], &sheen_tile);
-            lv_obj_add_style(sh, &st_sheen, 0);
-            lv_obj_add_style(sh, &st_sheen_f, LV_STATE_FOCUSED);
-        }
         /* .tile__dot:before: 8px rgba(255,255,255,.92), 0 0 6px rgba(0,0,0,.45), shown while running */
         lv_obj_t *d = box(R->track, i * TILE_STEP + TILE_W / 2 - 4, -24 - 4, 8, 8);
         lv_obj_set_style_radius(d, 4, 0);
@@ -3536,6 +3698,7 @@ static void settings_pointer(int level, int i) {
 static void motion_apply(void) {
     motion_off = prefs.reduce_motion;
     st_tr.time = motion_off ? 0 : FOCUS_MS;
+    st_tr_press.time = motion_off ? 0 : PRESS_MS;
     lv_obj_report_style_change(&st_tile);
     lv_obj_report_style_change(&st_ptile);
 }
@@ -3820,7 +3983,7 @@ static void pointer_focus(int x, int y, bool click) {
     lv_point_t pt = { x, y };
     lv_obj_t *root = overlay ? overlay : settings_layer ? settings_layer : scr;
     lv_obj_t *o = lv_indev_search_obj(root, &pt);
-    while (o && !lv_obj_get_user_data(o)) o = lv_obj_get_parent(o);
+    while (o && (!lv_obj_get_user_data(o) || lv_obj_get_user_data(o) == GLINT_TAG)) o = lv_obj_get_parent(o);
     intptr_t tag = o ? (intptr_t) lv_obj_get_user_data(o) : 0;
     static intptr_t last_tag = -1;
     if (tag != last_tag) { LOG("pointer %d,%d -> tag %lx\n", x, y, (long) tag); last_tag = tag; }
@@ -4328,6 +4491,9 @@ static void status_build(void) {
         }
         clk_time = flex_box(digits, LV_FLEX_FLOW_ROW, LV_FLEX_ALIGN_END, 0);   /* filled by clk_time_set */
         lv_obj_add_flag(clk_time, LV_OBJ_FLAG_OVERFLOW_VISIBLE);       /* digits roll in from below */
+        /* LVGL counts a child's translate in its parent's content height: a sized-to-content row
+         * grew while a digit rolled in, and the centred block jumped up for the roll */
+        lv_obj_set_height(clk_time, lv_font_get_line_height(tf));
         lv_obj_set_style_text_font(clk_time, tf, 0);
         lv_obj_set_style_text_color(clk_time, lv_color_hex(color), 0);
         clk_look = look;
@@ -4569,7 +4735,7 @@ static void cmd_cb(lv_timer_t *t) {
     else if (!strcmp(c, "wpchoose")) { if (!settings_layer) open_settings(); settings_push(P_WALLPAPER, 0); }
     else if (!strcmp(c, "countries")) { if (!settings_layer) open_settings(); settings_push(P_CHOICE, O_COUNTRY); }
     else if (sscanf(c, "scroll %d %d", &scroll_ms, &scroll_left) == 2) lv_timer_create(scroll_cb, (uint32_t) scroll_ms, NULL);
-    else if (sscanf(c, "hover %d %d", &hover_x, &hover_y) == 2) pointer_focus(hover_x, hover_y, false);
+    else if (sscanf(c, "hover %d %d", &hover_x, &hover_y) == 2) { pointer_focus(hover_x, hover_y, false); sway_pointer(hover_x, hover_y); }
     else if (sscanf(c, "dump %d %d %d %d %d", &dump_left, &dump_rect.x, &dump_rect.y, &dump_rect.w, &dump_rect.h) == 5) dump_idx = 0;
     else if (!strcmp(c, "standby")) { int t = prefs.ss_type; prefs.ss_type = 2; saver_start(); prefs.ss_type = t; }   /* not saved */
     else if (!strcmp(c, "statbeg")) { bench_on = true; bf_n = bf_sum = bf_max = bf_o16 = bf_o33 = 0; }
@@ -4690,7 +4856,7 @@ int main(void) {
                 if (k == K_OK && ok_down) continue;   /* repeats of a held OK must not click what the hold opened */
                 /* OK in rows and folders is decided on release: a tap activates, a hold opens the menu */
                 if (k == K_OK && !saver_active() && ui.engaged && !ui.dock_hidden && !ui.moving && (ui.zone == Z_ROWS || ui.zone == Z_FOLDER)) {
-                    if (!e.key.repeat && !ok_down) { ok_down = true; ok_long = false; ok_down_at = now; }
+                    if (!e.key.repeat && !ok_down) { ok_down = true; ok_long = false; ok_down_at = now; press_sync(true); }
                     continue;
                 }
                 handle(k);
@@ -4706,12 +4872,12 @@ int main(void) {
                 if (ui.dock_hidden) { ui.dock_hidden = false; ui_refresh(true); }   /* any pointer move brings the dock back */
                 int p = pill_at(e.motion.x, e.motion.y);
                 if (p >= 0 && !overlay && !settings_layer) { ui.engaged = true; ui.zone = Z_TOP; ui.top = p; ui.dock_hidden = false; ui_refresh(true); }
-                else pointer_focus(e.motion.x, e.motion.y, false);
+                else { pointer_focus(e.motion.x, e.motion.y, false); sway_pointer(e.motion.x, e.motion.y); }
             } else if (e.type == SDL_MOUSEBUTTONDOWN && !saver_active() && pill_at(e.button.x, e.button.y) < 0) {
                 /* lumen rows onMouseDown: holding the pointer's OK on a tile opens its menu, as the key does */
                 pointer_focus(e.button.x, e.button.y, false);
                 if (ui.engaged && !ui.dock_hidden && !ui.moving && (ui.zone == Z_ROWS || ui.zone == Z_FOLDER)) {
-                    ok_down = true; ok_long = false; ok_down_at = SDL_GetTicks();
+                    ok_down = true; ok_long = false; ok_down_at = SDL_GetTicks(); press_sync(true);
                 }
             } else if (e.type == SDL_MOUSEBUTTONUP && saver_active()) {
                 handle(K_BACK);
@@ -4736,6 +4902,7 @@ int main(void) {
             }
         }
         if (ok_down && !ok_long && SDL_GetTicks() - ok_down_at >= LONG_PRESS_MS) { ok_long = true; handle(K_HOLD); }
+        press_sync(ok_down && !ok_long);
         /* "After idle": the dock slides away after 8 s without input on the home screen */
         if ((prefs.dock_hide & 2) && !ui.dock_hidden && ui.zone == Z_ROWS && !ui_busy() && SDL_GetTicks() - last_input > IDLE_HIDE_MS) {
             ui.dock_hidden = true;

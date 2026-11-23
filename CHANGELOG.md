@@ -10,6 +10,9 @@ All notable changes to this project are documented here. The format follows
 
 - The clock rolls a changed digit: the old one rises away, shrinking and fading, as the new one
   springs up from below. Reduce motion turns it off.
+- The focused tile carries a soft glint instead of the fixed sheen, as on Apple TV. It follows the
+  Magic Remote pointer and slides in from the side focus came from. Holding OK presses the tile
+  in, and the tile a menu opens over stays raised under it.
 
 ### Changed
 

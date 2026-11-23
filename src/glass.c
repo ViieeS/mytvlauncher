@@ -177,23 +177,18 @@ bool glass_rim(lv_img_dsc_t *out, int w, int h, int r, uint8_t rim_tl, uint8_t r
     return true;
 }
 
-bool glass_sheen(lv_img_dsc_t *out, int w, int h, int r) {
-    static const uint8_t stops[3] = { 0x5c, 0x1a, 0x00 };
-    uint8_t *px = malloc((size_t)w * h * 4);
+bool glass_glint(lv_img_dsc_t *out, int d, uint8_t peak) {
+    uint8_t *px = malloc((size_t)d * d * 4);
     if (!px) return false;
-    float bx = w * 0.5f, by = h * 0.5f, gx, gy;
-    grad_setup(115.f, w, h, &gx, &gy);
-    for (int j = 0; j < h; j++)
-        for (int i = 0; i < w; i++) {
-            float lx = i + 0.5f - bx, ly = j + 0.5f - by;
-            float cov = clampf(0.5f - rrect_sdf(lx, ly, bx, by, (float)r, NULL, NULL), 0.f, 1.f);
-            float s = 0.5f + lx * gx + ly * gy;
-            float a = s < 0.46f ? grad3(s / 0.46f, stops, 0.28f / 0.46f) : 0.f;
-            uint8_t *o = px + ((size_t)j * w + i) * 4;
+    float c = d * 0.5f, sigma = d / 4.4f;   /* exp(-2.2^2): under 1 % left at the edge */
+    for (int j = 0; j < d; j++)
+        for (int i = 0; i < d; i++) {
+            float x = (i + 0.5f - c) / sigma, y = (j + 0.5f - c) / sigma;
+            uint8_t *o = px + ((size_t)j * d + i) * 4;
             o[0] = o[1] = o[2] = 255;
-            o[3] = (uint8_t)(255.f * a * cov);
+            o[3] = (uint8_t)(peak * expf(-(x * x + y * y)) + 0.5f);
         }
-    dsc_init(out, px, w, h);
+    dsc_init(out, px, d, d);
     return true;
 }
 
