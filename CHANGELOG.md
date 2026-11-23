@@ -9,7 +9,7 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - The clock rolls a changed digit: the old one rises away, shrinking and fading, as the new one
-  springs up from below. Reduce motion turns it off.
+  springs up from below. With Reduce motion the two digits cross-fade in place.
 - The focused tile carries a soft glint instead of the fixed sheen, as on Apple TV. It follows the
   Magic Remote pointer and slides in from the side focus came from. Holding OK presses the tile
   in, and the tile a menu opens over stays raised under it.
@@ -24,6 +24,9 @@ All notable changes to this project are documented here. The format follows
 - No text is smaller than 23 px, Apple TV's minimum: tile names, top bar labels, the weather,
   hints and Control Center were 19 to 22 px. A Control Center value too long for its module ends
   with an ellipsis.
+- Reduce motion works as on Apple TV: fades stay, nothing slides, zooms or sways, and the dock
+  and clock dissolve to their new place instead of jumping. Scrolling a row stays smooth. It used
+  to cut every animation, fades included.
 
 ## [1.1.0] - 2026-11-22
 

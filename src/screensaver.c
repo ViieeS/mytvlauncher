@@ -304,7 +304,7 @@ static void photo_next(bool first) {
         lv_anim_set_var(&an, img);
         lv_anim_set_exec_cb(&an, a_opa);
         lv_anim_set_values(&an, 0, LV_OPA_COVER);
-        lv_anim_set_time(&an, sv.env.reduce_motion ? 0 : 1600);
+        lv_anim_set_time(&an, 1600);   /* a fade: Reduce motion keeps it */
         lv_anim_set_path_cb(&an, lv_anim_path_ease_in_out);
         lv_anim_start(&an);
     }
@@ -667,7 +667,7 @@ static lv_obj_t *root_create(void) {
     lv_anim_set_var(&an, r);
     lv_anim_set_exec_cb(&an, a_opa);
     lv_anim_set_values(&an, 0, LV_OPA_COVER);
-    lv_anim_set_time(&an, sv.env.reduce_motion ? 0 : 500);
+    lv_anim_set_time(&an, 500);    /* a fade: Reduce motion keeps it */
     lv_anim_set_path_cb(&an, lv_anim_path_ease_out);
     lv_anim_start(&an);
     sv.warm_from = lv_tick_get() + 1000;

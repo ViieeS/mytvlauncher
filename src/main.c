@@ -604,10 +604,12 @@ static void ax_zoom_obj(void *o, int32_t v) { lv_obj_set_style_transform_zoom(o,
 /* An empty range (hi < lo, e.g. a row before its apps load) gives lo: an index stays valid. */
 static int clampi(int v, int lo, int hi) { return v < lo || hi < lo ? lo : v > hi ? hi : v; }
 
-static bool motion_off;    /* Settings > Appearance > Reduce motion */
+/* Settings > Appearance > Reduce motion, as tvOS reads it: no movement, scaling or sway, but fades
+ * stay, and a large move becomes a dissolve (move_or_dissolve). Scrolling the user drives stays. */
+static bool motion_off;
 static void anim(void *obj, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms, lv_anim_path_cb_t path) {
     lv_anim_del(obj, cb);
-    if (motion_off) ms = 0;
+    if (motion_off && cb != ax_opa && cb != ax_opa_layered) ms = 0;
     if (from == to || ms == 0) { cb(obj, to); return; }
     lv_anim_t a;
     lv_anim_init(&a);
@@ -620,6 +622,41 @@ static void anim(void *obj, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uin
 }
 static void anim_opa(lv_obj_t *o, lv_opa_t to, uint32_t ms) {
     anim(o, ax_opa, lv_obj_get_style_opa(o, 0), to, ms, lv_anim_path_ease_out);
+}
+
+/* The dissolve: fade out in place, jump, fade in. For objects whose opacity nothing else animates. */
+#define DISSOLVE_MS 120
+typedef struct { lv_obj_t *obj; lv_anim_exec_xcb_t cb; int32_t to; } dissolve_t;
+static dissolve_t dissolves[2];   /* rows_cont and status_cont */
+
+static void dissolve_exec(void *var, int32_t v) {
+    dissolve_t *d = var;
+    if (v >= DISSOLVE_MS) d->cb(d->obj, d->to);
+    int32_t o = v < DISSOLVE_MS ? DISSOLVE_MS - v : v - DISSOLVE_MS;
+    lv_obj_set_style_opa(d->obj, (lv_opa_t) (LV_OPA_COVER * o / DISSOLVE_MS), 0);
+}
+
+static void move_or_dissolve(lv_obj_t *obj, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms,
+                             lv_anim_path_cb_t path) {
+    dissolve_t *d = NULL;
+    for (int i = 0; i < COUNT(dissolves) && !d; i++) if (dissolves[i].obj == obj || !dissolves[i].obj) d = &dissolves[i];
+    if (!d) { anim(obj, cb, from, to, ms, path); return; }   /* more callers than slots: plain move */
+    d->obj = obj; d->cb = cb; d->to = to;
+    bool running = lv_anim_get(d, dissolve_exec) != NULL;
+    if (!motion_off || !ms || from == to) {
+        if (running) { lv_anim_del(d, dissolve_exec); lv_obj_set_style_opa(obj, LV_OPA_COVER, 0); }
+        anim(obj, cb, from, to, ms, path);
+        return;
+    }
+    if (running) return;          /* the running dissolve lands on the new `to` */
+    lv_anim_del(obj, cb);         /* a move started before Reduce motion was turned on */
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, d);
+    lv_anim_set_exec_cb(&a, dissolve_exec);
+    lv_anim_set_values(&a, 0, 2 * DISSOLVE_MS);
+    lv_anim_set_time(&a, 2 * DISSOLVE_MS);
+    lv_anim_start(&a);
 }
 
 /* Scroll: the position follows its target as a critically damped spring (SCROLL_W rad/ms). A held
@@ -735,7 +772,12 @@ static void sway_step(lv_timer_t *tm) {
 static void sway_to(float tx, float ty) {
     if (!sway.tile) return;
     sway.tx = tx; sway.ty = ty;
-    if (motion_off) { sway.x = tx; sway.y = ty; sway_stop(); sway_place(sway.tile, tx, ty); return; }
+    if (motion_off) {                                    /* Reduce motion: no parallax, the glint rests */
+        sway.x = sway.tx = sway.y = sway.ty = 0;
+        sway_stop();
+        sway_place(sway.tile, 0, 0);
+        return;
+    }
     if (sway.tm || (sway.x == tx && sway.y == ty && !sway.vx && !sway.vy)) return;
     sway.tf = (float) SDL_GetTicks();
     sway.tm = lv_timer_create(sway_step, LV_DISP_DEF_REFR_PERIOD, NULL);
@@ -796,7 +838,7 @@ static void anim_scroll(void *obj, lv_anim_exec_xcb_t cb, int32_t from, int32_t 
     chase_t *c = NULL;
     for (int i = 0; i < COUNT(chases) && !c; i++) if (chases[i].tm && chases[i].obj == obj) c = &chases[i];
     for (int i = 0; i < COUNT(chases) && !c; i++) if (!chases[i].tm) c = &chases[i];
-    if (!c || !animate || motion_off || (!c->tm && from == to)) { if (c) chase_stop(c); cb(obj, to); return; }
+    if (!c || !animate || (!c->tm && from == to)) { if (c) chase_stop(c); cb(obj, to); return; }
     uint32_t now = SDL_GetTicks();
     if (!c->tm) { c->ramp_ms = 0; c->ramp_t0 = now; }
     else if (to != c->to) {
@@ -1931,7 +1973,7 @@ static void rows_layout(bool animate) {
     /* lumen-performance.css: rows move by translate3d in 160 ms (-300 lower, +1300 hidden) */
     int y = ROWS_TOP - (lower ? LOWER_SHIFT : 0);
     if (ui.dock_hidden) y += 1300;
-    anim(rows_cont, ax_y, lv_obj_get_y(rows_cont), y, animate ? 160 : 0, path_lumen);
+    move_or_dissolve(rows_cont, ax_y, lv_obj_get_y(rows_cont), y, animate ? 160 : 0, path_lumen);
     bool veil = lower && !ui.dock_hidden;            /* .lowerveil is display:none with the dock away */
     if (veil != ui.lower) {
         ui.lower = veil;
@@ -3785,7 +3827,7 @@ static void ui_refresh(bool animate) {
     topbar_update();
     rows_layout(animate);
     /* status slides off with the dock (.screen--dockhidden .status translateY(830px)) */
-    anim(status_cont, ax_ty, lv_obj_get_style_translate_y(status_cont, 0), ui.dock_hidden ? status_dock_dy() : 0, animate ? 320 : 0, path_lumen);
+    move_or_dissolve(status_cont, ax_ty, lv_obj_get_style_translate_y(status_cont, 0), ui.dock_hidden ? status_dock_dy() : 0, animate ? 320 : 0, path_lumen);
     for (int p = 0; p < 2; p++) {
         anim_opa(layers[L_PILL0 + p].img[layers[L_PILL0 + p].front], ui.dock_hidden ? 0 : LV_OPA_COVER, animate ? 220 : 0);
         anim_opa(pill_icon[p], ui.dock_hidden ? 0 : LV_OPA_COVER, animate ? 220 : 0);
@@ -4377,6 +4419,7 @@ static void roll_exec(void *var, int32_t ms) {
     if (f & 1) { opa = 1 - A; zoom = 1 - 0.6016f * A; dy = -dir * 0.59375f * H * B; }
     else { opa = A; zoom = 0.3984f + 0.6016f * A; dy = dir * 0.59375f * H * (1 - B); }
     opa = opa < 0 ? 0 : opa > 1 ? 1 : opa;
+    if (motion_off) { zoom = 1; dy = 0; }   /* Reduce motion: the two digits cross-fade in place */
     lv_obj_set_style_text_opa(o, (lv_opa_t) (clk_look * opa), 0);
     lv_obj_set_style_transform_zoom(o, (lv_coord_t) lroundf(256 * (zoom < 0 ? 0 : zoom)), 0);
     lv_obj_set_style_translate_y(o, (lv_coord_t) lroundf(dy), 0);
@@ -4420,7 +4463,7 @@ static void clk_time_set(const char *s, bool still) {
     const lv_font_t *f = lv_obj_get_style_text_font(clk_time, 0);
     uint32_t color = lv_color_to32(lv_obj_get_style_text_color(clk_time, 0)) & 0xffffff;
     int n = (int) strlen(s);
-    if (n != clk_nch || still || motion_off || n >= COUNT(clk_ch)) {
+    if (n != clk_nch || still || n >= COUNT(clk_ch)) {
         lv_obj_clean(clk_time);
         clk_nch = n < COUNT(clk_ch) ? n : COUNT(clk_ch) - 1;
         for (int i = 0; i < clk_nch; i++) clk_ch[i] = clk_char(clk_time, f, color, s[i]);
