@@ -683,10 +683,11 @@ void standby_open(const saver_env_t *env, int face, int color) {
     sv.ph_ahead = -1;
     sv.root = root_create();
     sv.tint = box(sv.root, 0, 0, W, H);
-    /* .sb__hint: shown once, white .55 for 70 % of 6 s, then fades out */
+    /* .sb__hint: shown once, white .55 for 70 % of 6 s, then fades out; 60 px off the bottom
+     * (tvOS safe area; lumen 28) */
     char h[96];
     snprintf(h, sizeof(h), "%s \xC2\xB7 \xE2\x97\x80 \xE2\x96\xB6 face \xC2\xB7 \xE2\x96\xB2 \xE2\x96\xBC colour \xC2\xB7 OK exit", FACE_NAMES[sv.face]);
-    sv.hint = centered(sv.root, &font_23m, 0xffffff, 0x8c, h, H - 28 - lv_font_get_line_height(&font_23m));
+    sv.hint = centered(sv.root, &font_23m, 0xffffff, 0x8c, h, H - 60 - lv_font_get_line_height(&font_23m));
     lv_anim_t an;
     lv_anim_init(&an);
     lv_anim_set_var(&an, sv.hint);

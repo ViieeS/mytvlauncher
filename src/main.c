@@ -52,8 +52,10 @@ static FILE *lg;
 #define TILE_GAP 28
 #define TILE_STEP (TILE_W + TILE_GAP)
 #define ROW_VIEW_W (SCR_W - 2 * EDGE)   /* It: a row scrolls once it is wider than this */
-#define ROWS_TOP 846              /* se.rowsTop: top of the first row's tiles */
-#define ROW_PITCH 264             /* tile 142 + label 26 + two 29 px lines + 38 to the next row */
+/* Top of the first row's tiles: lumen 846, raised so the one-line label under a focused tile ends
+ * at 1020, the bottom of the tvOS safe area (tile 142 + 26 + 29). */
+#define ROWS_TOP 823
+#define ROW_PITCH 264             /* tile 142 + label 26 + one 29 px line + 67 to the next row */
 #define LOWER_SHIFT 300           /* .rows--lower */
 static const int FOCUS_ZOOMS[3] = { 277, 297, 323 };   /* focusStrength subtle 1.08 / normal 1.16 / strong 1.26 */
 #define FOCUS_LIFT 6
@@ -1926,12 +1928,12 @@ static void row_fill(int ri, int kind, const ref_t *items, int n) {
         lv_obj_set_style_opa(d, 0, 0);
         R->dot[i] = d;
     }
-    /* .tile__label: under the focused tile, 23px/600 (lumen 19, tvOS minimum 23), two lines,
-     * centred on the tile + gap */
+    /* .tile__label: under the focused tile, 23px/600 (lumen 19 in two lines; tvOS minimum 23), one
+     * line with an ellipsis so it ends inside the safe area, centred on the tile + gap */
     R->label = label(R->track, &font_23s, C_TEXT, "");
     lv_obj_set_width(R->label, TILE_W + TILE_GAP - 8);
     lv_label_set_long_mode(R->label, LV_LABEL_LONG_DOT);
-    lv_obj_set_height(R->label, lv_font_get_line_height(&font_23s) * 2);
+    lv_obj_set_height(R->label, lv_font_get_line_height(&font_23s));
     lv_obj_set_style_text_align(R->label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_opa(R->label, 0, 0);
     lv_obj_set_width(R->track, row_width(R) > 0 ? row_width(R) : 1);
@@ -4705,7 +4707,7 @@ static void build_ui(void) {
     lv_obj_set_style_pad_hor(toast, 28, 0);
     lv_obj_set_style_pad_ver(toast, 14, 0);
     label(toast, &font_24m, 0xAAAAAA, "");
-    lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -56);
+    lv_obj_align(toast, LV_ALIGN_BOTTOM_MID, 0, -60);   /* lumen 56; tvOS safe area 60 */
     lv_obj_add_flag(toast, LV_OBJ_FLAG_HIDDEN);
 
     clock_tick(NULL);
@@ -4770,6 +4772,45 @@ static void sdl_log(void *data, int category, SDL_LogPriority priority, const ch
 #ifdef MYTV_DEBUG
 static int hover_x, hover_y;
 
+/* Test hook `safearea <scene>`: logs every visible label, image and focusable object that reaches
+ * into tvOS's unsafe margin (60 px at the top and bottom, 80 px at the sides), clipped and faded
+ * as LVGL draws it. Full-screen images (wallpaper, veils) may bleed and are skipped. It checks
+ * object boxes, not glyphs or pixels: a full-width centred label reports L and R, a glass image
+ * its shadow margin, and a zoomed small image (the blurred backdrop) its unzoomed box. */
+#define SAFE_X 80
+#define SAFE_Y 60
+static void safe_walk(lv_obj_t *o, lv_area_t clip, int opa) {
+    if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return;
+    opa = opa * lv_obj_get_style_opa(o, 0) / 255 * lv_obj_get_style_opa_layered(o, 0) / 255;
+    if (opa <= 8) return;
+    lv_area_t a, vis;
+    lv_obj_get_coords(o, &a);
+    if (_lv_area_intersect(&vis, &a, &clip)) {
+        void *ud = lv_obj_get_user_data(o);
+        char what[40] = "";
+        if (lv_obj_check_type(o, &lv_label_class) && lv_label_get_text(o)[0] && lv_obj_get_style_text_opa(o, 0) > 8)
+            snprintf(what, sizeof(what), "text \"%.24s\"", lv_label_get_text(o));
+        else if (lv_obj_check_type(o, &lv_img_class) && ud != GLINT_TAG && lv_obj_get_style_img_opa(o, 0) > 8 && lv_area_get_width(&a) < SCR_W)
+            snprintf(what, sizeof(what), "img");
+        else if (lv_obj_has_flag(o, LV_OBJ_FLAG_CLICKABLE) && ud && ud != TAG_BACKDROP)
+            snprintf(what, sizeof(what), "focusable %lx", (unsigned long) (uintptr_t) ud);
+        if (what[0] && (vis.x1 < SAFE_X || vis.y1 < SAFE_Y || vis.x2 >= SCR_W - SAFE_X || vis.y2 >= SCR_H - SAFE_Y))
+            LOG("SAFE %s at %d,%d..%d,%d over %s%s%s%s\n", what, vis.x1, vis.y1, vis.x2, vis.y2,
+                vis.x1 < SAFE_X ? "L" : "", vis.y1 < SAFE_Y ? "T" : "", vis.x2 >= SCR_W - SAFE_X ? "R" : "", vis.y2 >= SCR_H - SAFE_Y ? "B" : "");
+    }
+    if (!lv_obj_has_flag(o, LV_OBJ_FLAG_OVERFLOW_VISIBLE) && !_lv_area_intersect(&clip, &clip, &a)) return;
+    uint32_t n = lv_obj_get_child_cnt(o);
+    for (uint32_t i = 0; i < n; i++) safe_walk(lv_obj_get_child(o, i), clip, opa);
+}
+
+static void safe_check(const char *scene) {
+    lv_area_t screen = { 0, 0, SCR_W - 1, SCR_H - 1 };
+    LOG("SAFE scene %s\n", scene);
+    lv_obj_t *roots[] = { lv_scr_act(), lv_layer_top(), lv_layer_sys() };
+    for (int i = 0; i < COUNT(roots); i++) safe_walk(roots[i], screen, 255);
+    LOG("SAFE end\n");
+}
+
 static void cmd_cb(lv_timer_t *t) {
     (void) t;
     char c[32] = "";
@@ -4794,6 +4835,7 @@ static void cmd_cb(lv_timer_t *t) {
         LOG("STAT frames=%u avg=%ums max=%ums >16ms=%u >33ms=%u\n", bf_n, bf_n ? bf_sum / bf_n : 0, bf_max, bf_o16, bf_o33);
     }
     else if (!strcmp(c, "bench")) { bench_step = 0; lv_timer_create(bench_cb, 350, NULL); }
+    else if (!strncmp(c, "safearea ", 9)) safe_check(c + 9);
 }
 #endif
 

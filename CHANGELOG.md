@@ -27,6 +27,9 @@ All notable changes to this project are documented here. The format follows
 - Reduce motion works as on Apple TV: fades stay, nothing slides, zooms or sways, and the dock
   and clock dissolve to their new place instead of jumping. Scrolling a row stays smooth. It used
   to cut every animation, fades included.
+- Everything stays inside Apple TV's safe area, 60 px from the top and bottom of the screen. The
+  dock sits 23 px higher and the name under a tile is one line, cut with an ellipsis when long.
+  The toast and the screensaver hint moved up too.
 
 ## [1.1.0] - 2026-11-22
 

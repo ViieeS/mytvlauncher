@@ -2,7 +2,8 @@
 # Runs on the TV against a debug launcher (make DEBUG=1) that is in front, and prints the log lines
 # of this run: three `bench` key walks, a pointer sweep across the dock and a wiggle inside its
 # middle tile. perf_gaps.py reads the output. The pointer points assume the dock at the bottom of a
-# 1920x1080 screen (tiles centred on y=916, the middle one on x=960).
+# 1920x1080 screen. The points stay inside the dock tiles at both dock heights (tile tops at 846
+# before 1.2 and 823 after), so a gate against an older tag measures the same hovers.
 C=/tmp/launcher_cmd
 LOG=/tmp/launcher.log
 n=$(date +%s)
