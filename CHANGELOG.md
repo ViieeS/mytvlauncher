@@ -20,6 +20,7 @@ All notable changes to this project are documented here. The format follows
   stay readable from the sofa.
 - The typeface is Inter instead of Geist, in the UI and the app icon. Inter is the open design
   closest to Apple TV's SF Pro, and its optical sizes follow the text size.
+- All digits are the same width, so the clocks no longer shift sideways when a digit changes.
 
 ## [1.1.0] - 2026-11-22
 

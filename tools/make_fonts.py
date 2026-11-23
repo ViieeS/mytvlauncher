@@ -6,6 +6,9 @@ trimming every advance instead, which is what the CSS does too.
 
 The typeface is Inter, the open design closest to Apple TV's SF Pro. Its variable font gives
 every weight below, and its optical-size axis follows the pixel size, as SF's does on tvOS.
+Digits are Inter's tabular figures (OpenType `tnum`): the clocks change digits in place, and
+proportional ones moved everything after them sideways. `tnum` needs Pillow built with libraqm;
+without it Pillow refuses the `features` argument.
 
 usage: make_fonts.py <InterVariable.ttf> <out .c> <out .h>
 """
@@ -89,6 +92,7 @@ def pack4(img):
 # 1x raster. All of it happens here: the bitmaps cost the same to draw at run time.
 SS = 10
 LUMINANCE = 1.0
+TNUM = ["tnum"]   # digits only: Inter's tnum also widens the space, hyphen and brackets
 
 
 def dilation(px):
@@ -109,8 +113,9 @@ def build(name, weight, px, track, chars):
     chars = sorted(set(chars), key=ord)
     bitmap, dscs = bytearray(), ["{.bitmap_index = 0, .adv_w = 0, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}"]
     for ch in chars:
-        adv = max(0, round((font.getlength(ch) + track * px) * 16))
-        l, t, r, b = font.getbbox(ch, anchor="ls")
+        feats = TNUM if ch.isdigit() else None
+        adv = max(0, round((font.getlength(ch, features=feats) + track * px) * 16))
+        l, t, r, b = font.getbbox(ch, anchor="ls", features=feats)
         if r - l <= 0 or b - t <= 0:
             dscs.append(f"{{.bitmap_index = {len(bitmap)}, .adv_w = {adv}, .box_w = 0, .box_h = 0, .ofs_x = 0, .ofs_y = 0}}")
             continue
@@ -120,7 +125,7 @@ def build(name, weight, px, track, chars):
         # the stroke also grows the glyph downward by `stroke`: lift it by as much, so the bottom
         # stays on the baseline and the top gains twice the dilation, as on macOS
         ImageDraw.Draw(hi).text((-x0 * SS, -y0 * SS - stroke), ch, font=big, fill=255, anchor="ls",
-                                stroke_width=stroke, stroke_fill=255)
+                                stroke_width=stroke, stroke_fill=255, features=feats)
         img = hi.resize((w, h), Image.BOX)
         bl, bt, br, bb = img.getbbox()
         img = img.crop((bl, bt, br, bb))

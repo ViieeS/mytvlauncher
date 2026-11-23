@@ -4565,10 +4565,9 @@ static void clock_tick(lv_timer_t *t) {
         if (strcmp(clk_text, s)) { clk_time_set(s, !t); changed = true; }
         const char *p = h12 && prefs.show_ampm ? (lt->tm_hour < 12 ? "AM" : "PM") : "";
         if (strcmp(lv_label_get_text(clk_period), p)) { lv_label_set_text(clk_period, p); changed = true; }
-        if (clk_sec) {
+        if (clk_sec) {                       /* tabular digits: the width never changes, no re-place */
             snprintf(s, sizeof(s), ":%02d", lt->tm_sec);
             lv_label_set_text(clk_sec, s);
-            changed |= prefs.clock_pos != 0;                            /* digits are not tabular */
         }
         if (clk_cdate) {
             snprintf(s, sizeof(s), "%s %d", WD[lt->tm_wday], lt->tm_mday);
