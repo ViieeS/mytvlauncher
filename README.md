@@ -114,6 +114,17 @@ sh tools/tv/deploy.sh <tv-ip>
 the app (by default the debug build from `make DEBUG=1`). The debug build logs to `/tmp/launcher.log`
 on the TV.
 
+Before a release, run the frame pacing gate with myTV in front on the TV:
+
+```bash
+sh tools/tv/perfgate.sh <tv-ip>
+```
+
+It builds the working tree and the last release tag as debug builds and installs each in turn.
+Then it walks the dock with the arrow keys and sweeps the pointer over it, and counts the frames
+that missed a vsync. It fails when the working tree misses clearly more than the release did. The
+run takes about ten minutes, and the installed launcher is put back at the end.
+
 ## Layout
 
 | Path | What |
