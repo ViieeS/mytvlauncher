@@ -324,7 +324,7 @@ run() {
   mode=""
   tick=0
   prev_fg=""
-  strikes=0; strike_start=0; last_launch=0; mytv_seen=0
+  strikes=0; strike_start=0; last_launch=0; mytv_seen=0; launch_at=0; launch_tries=0
   # a press from before this watcher started (it survives standby in /tmp) is not a new failure
   seen_press=$(stat -c %Y "$PRESSED" 2>/dev/null || echo 0)
   # Power phase last seen. When QuickStart+ did not hold, power-on is a cold boot: init.d runs well
@@ -422,6 +422,24 @@ run() {
       elif [ $((now - last_launch)) -ge 3 ]; then
         last_launch=$now
         launch_mytv
+        launch_at=$now; launch_tries=1
+        log "LG Home in front -> myTV"
+      fi
+    fi
+    # The launch above can land while an install still swaps the app's files: SAM accepts it and
+    # nothing opens, and the transition is not seen again. So check that myTV came up.
+    if [ "$launch_at" -gt 0 ]; then
+      if [ -n "$fg" ] && [ "$fg" != "$LGHOME" ]; then
+        launch_at=0
+      elif [ $((now - launch_at)) -ge 5 ]; then
+        if [ "$launch_tries" -lt 3 ] && [ ! -f "$BYPASS" ]; then
+          launch_tries=$((launch_tries + 1)); launch_at=$now; last_launch=$now
+          log "LG Home still in front, launch $launch_tries -> myTV"
+          launch_mytv
+        else
+          launch_at=0
+          log "LG Home still in front after $launch_tries launches, giving up"
+        fi
       fi
     fi
     prev_fg=$fg

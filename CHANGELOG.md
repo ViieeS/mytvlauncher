@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Updating myTV over a running copy no longer leaves the TV on LG Home. If myTV does not come up
+  after the Home screen opens, the watcher launches it again, up to three times, and writes each
+  attempt to its log.
+
 ## [1.2.0] - 2026-11-25
 
 ### Fixed
