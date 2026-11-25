@@ -5,9 +5,9 @@ usr/palm/applications/<id>/. Written here instead of with ares-package so the bu
 Node.js. Timestamps and owners are fixed, so the same inputs give the same sha256.
 
 usage: make_ipk.py --binary build/launcher --sdl <libSDL2-2.0.so.0> --package package --out build
-                   --repo https://github.com/<owner>/<repo> [--homehook build/homehook]
+                   --repo https://github.com/<owner>/<repo>
 
---homehook adds the root-only Home key hook (homehook/): ezinject, libmytvhook.so, watch.sh.
+The Home button scripts (homehook/) are packed from the source tree: they run only with root.
 """
 import argparse
 import gzip
@@ -55,7 +55,6 @@ def main():
     p.add_argument("--package", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--repo", required=True)
-    p.add_argument("--homehook")
     a = p.parse_args()
 
     info = json.load(open(os.path.join(a.package, "appinfo.json")))
@@ -71,17 +70,15 @@ def main():
              ("lib/libSDL2-2.0.so.0", read(a.sdl), 0o755),       # read() follows the symlink
              ("icon.png", read(os.path.join(a.package, "icon.png")), 0o644),
              ("largeIcon.png", read(os.path.join(a.package, "largeIcon.png")), 0o644),
-             ("splash.png", read(os.path.join(a.package, "splash.png")), 0o644)]
+             ("splash.png", read(os.path.join(a.package, "splash.png")), 0o644),
+             ("homehook/watch.sh", read("homehook/watch.sh"), 0o755),
+             ("homehook/keyfilter.js", read("homehook/keyfilter.js"), 0o644)]
     wp_dir = os.path.join(a.package, "wallpapers")
     files += [(f"wallpapers/{n}", read(os.path.join(wp_dir, n)), 0o644)
               for n in sorted(os.listdir(wp_dir)) if n.endswith(".png")]
 
-    dirs = ["usr", "usr/palm", "usr/palm/applications", root, root + "/lib", root + "/wallpapers"]
-    if a.homehook:
-        files += [("homehook/ezinject", read(os.path.join(a.homehook, "ezinject.bin")), 0o755),
-                  ("homehook/libmytvhook.so", read(os.path.join(a.homehook, "libmytvhook.so")), 0o755),
-                  ("homehook/watch.sh", read("homehook/watch.sh"), 0o755)]
-        dirs.append(root + "/homehook")
+    dirs = ["usr", "usr/palm", "usr/palm/applications", root, root + "/lib", root + "/wallpapers",
+            root + "/homehook"]
     # ares-package writes this too. webosbrew's ipk-verify refuses a package without it.
     pkg_dir = f"usr/palm/packages/{app_id}"
     package_info = json.dumps({"app": app_id, "id": app_id, "loc_name": info["title"],

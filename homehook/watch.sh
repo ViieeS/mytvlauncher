@@ -7,10 +7,13 @@
 # HBC's run-parts calls it with no argument at boot through the init.d link. run-parts waits
 # for every hook and skips names with a dot, hence the link name and the detach below.
 #
-# The watcher injects libmytvhook.so into lginput2 and micomservice (again whenever one of
-# them restarts, since systemd brings it back without the hook). If injection is impossible it
-# falls back to polling: LG Home in front -> launch myTV. If myTV keeps failing to come up
-# after Home, it sets the bypass flag and Home goes to LG Home until myTV shows up again.
+# The watcher puts keyfilter.js into surface-manager's key filter chain, which surface-manager
+# builds from the configd value com.webos.surfacemanager.keyFilters. The value is kept on disk, so
+# after a cold boot the filter is in the chain before init.d runs and can open myTV at 23 s, not
+# 43 s. The price: the stored list replaces LG's whole list until the watcher removes it. Where the
+# list cannot be changed the watcher falls back to polling: LG Home in front -> launch myTV. If
+# myTV keeps failing to come up after Home, it sets the bypass flag and Home goes to LG Home
+# until myTV shows up again.
 # Without the app directory it removes its boot link and exits: uninstalling myTV is enough.
 
 APP_ID=com.viiees.mytvlauncher
@@ -26,20 +29,27 @@ OLD_LINK=/var/lib/webosbrew/init.d/60-mytv-homehook
 STATE=/var/lib/mytv
 DISABLED=$STATE/homehook.disabled
 MODE=$STATE/mode                    # hook | poll, what the running watcher does
-TRIES=$STATE/tries                  # "<daemon> <n>" inject attempts this boot
 LOG=$STATE/watch.log
-BYPASS=$STATE/homehook.bypass       # myTV keeps failing after Home: the hook passes Home to LG
-PRESSED=$STATE/homehook.pressed     # mtime = the last Home press the hook took
+BYPASS=$STATE/homehook.bypass       # myTV keeps failing after Home: the filter passes Home to LG
+PRESSED=$STATE/homehook.pressed     # mtime = the last Home press the filter took
 LAST_FG=$STATE/last_fg              # the foreground while awake; on disk so a cold boot sees it too
 LASTINPUT=/var/lib/eim/lastinput
 LASTINPUT_ORIG=$STATE/lastinput.orig  # eim's record while lastinput points at myTV
-KEYBINDS=$STATE/keybinds            # remote button -> app, read by the hook (mytvhook.c)
-KEYS_LEARN=$STATE/keys.learn
+KEYBINDS=$STATE/keybinds            # "<Qt key> <app id>" per line: remote button -> app
+KEYS_LEARN=$STATE/keys.learn        # mtime = when a learn started
 KEYS_LEARNED=$STATE/keys.learned
+LEARN_SECS=20
 ALLOW=/tmp/mytv-allow-lg-home
 LGINPUTHOOK=/home/root/.config/lginputhook/keybinds.json
 LGHOME=com.webos.app.home
-DAEMONS="lginput2 micomservice"
+CONFIGD=luna://com.webos.service.config
+CONFIGD_DB=/var/preferences/configd_factory_db.json   # configd's stored (non-volatile) values
+KF_LIST=com.webos.surfacemanager.keyFilters   # surface-manager's key filter chain
+KF_HANDLER=handleMyTVKeys
+KF_DATA=com.viiees.mytvlauncher.keyfilter     # watcher -> filter, see keyfilter.js
+KF_EVENT=com.viiees.mytvlauncher.keyevent     # filter -> watcher
+KF_BOOT=com.viiees.mytvlauncher.boot          # watcher -> filter, on disk: open myTV at a cold boot?
+KF_BOOTED=com.viiees.mytvlauncher.booted      # volatile: this boot's landing is decided
 export PATH="/bin:/sbin:/usr/bin:/usr/sbin:$PATH"
 
 log() { echo "$(date +%T) $*" >> "$LOG"; }
@@ -62,11 +72,16 @@ foreground() {
 # does "processing": "Request Screen Saver": LG's power state can sit in either for hours of use.
 # QuickStart+ keeps the watcher ticking through standby, so an asleep -> awake edge is the wake.
 power_phase() {
-  pwr=$(luna-send -n 1 luna://com.webos.service.tvpower/power/getPowerState '{}' </dev/null 2>/dev/null)
-  echo "$pwr" | grep -qE '"processing"[^"]*"[^"]*(Power|Standby|Screen On|LastInput)' && return
+  phase_of "$(luna-send -n 1 luna://com.webos.service.tvpower/power/getPowerState '{}' </dev/null 2>/dev/null)"
+}
+phase_of() {
+  # A power-off may go straight to Suspend: "Request Suspend" and "Prepare Suspend" then come
+  # with "state": "Active", and the foreground empties under them (24.11, off from Plex). "Prepare
+  # Resume" stays asleep: on that path it may be the main loop's only sample of the standby.
+  echo "$1" | grep -qE '"processing"[^"]*"[^"]*(Power|Standby|Suspend|Screen On|LastInput)' && return
   # Any other state is a passage: the nightly QuickStart+ reboot goes through one, and taking it
   # for a wake put lastinput back before the reboot.
-  case "$(echo "$pwr" | sed -n 's/.*"state"[^"]*"\([^"]*\)".*/\1/p')" in
+  case "$(echo "$1" | sed -n 's/.*"state"[^"]*"\([^"]*\)".*/\1/p')" in
     Active|"Screen Saver"|"Screen Off") echo awake ;;
     *Standby*|Suspend*) echo asleep ;;
   esac
@@ -76,6 +91,9 @@ power_phase() {
 # on a QuickStart+ wake and on a cold boot alike. Pointed at myTV, it makes bootd open myTV itself,
 # with no input on screen first. The rest of eim's record stays as it was. eim records physical
 # sources only, so it leaves the field alone while an app is in front, and rewrites it on an input.
+# Held over a standby only. On a cold boot bootd opens myTV through inputcommon, which leaves SAM
+# listing myTV in front with no process and a black screen until the watcher clears it at ~42 s.
+# A cold boot from awake is the filter's: it opens myTV at ~23 s, after a few seconds of the input.
 point_lastinput_at_mytv() {
   [ -f "$LASTINPUT" ] || return
   grep -q "\"physicalLastSourceAppId\":\"$APP_ID\"" "$LASTINPUT" && return
@@ -91,15 +109,17 @@ restore_lastinput() {
   rm -f "$LASTINPUT_ORIG"
 }
 
-# Held for as long as the user is in an app or LG Home, not just over a standby: a reboot or a power
-# cut skips standby, and bootd would show the input for the half minute before init.d starts this.
-# On an input, with the bypass on, or with no record of where the user is, eim's record stands.
-sync_lastinput() {
-  if [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg"; then
-    point_lastinput_at_mytv
-  else
-    restore_lastinput
-  fi
+# Power-on lands on myTV when the user left the TV in an app or LG Home. On an input, with the
+# bypass on, or with no record of where the user is, it lands where bootd puts it.
+lands_on_mytv() { [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg"; }
+
+# The filter's half of a cold boot. Stored only on a change: it is a write to configd's file.
+# False over a standby: a cold boot from there finds lastinput at myTV, and a launch from the
+# filter would wait on the ghost that leaves.
+publish_boot_landing() {
+  [ "$1" = "$boot_landing" ] && return
+  configd setConfigs "{\"configs\":{\"$KF_BOOT\":{\"openMyTV\":$1}}}" | grep -q '"returnValue": *true' \
+    && boot_landing=$1
 }
 
 # SAM can list myTV as running under another app's pid with no myTV process at all (seen after
@@ -107,28 +127,35 @@ sync_lastinput() {
 # Closing it by id clears the entry and releases the waiting launches. A launch in progress
 # looks the same for a moment, before its process has exec'd launcher: only an entry whose pid
 # is still the same foreign process 5 s later is a ghost.
+# A cold boot with lastinput at myTV always leaves one: bootd opens myTV through inputcommon, and
+# SAM lists myTV in front under inputcommon's pid on a black screen.
 sam_mytv_pid() {
   timeout -t 5 luna-send -n 1 luna://com.webos.service.applicationmanager/running '{}' </dev/null 2>/dev/null \
     | tr '{' '\n' | grep "\"id\":\"$APP_ID\"" | sed -n 's/.*"processid":"\{0,1\}\([0-9][0-9]*\).*/\1/p'
 }
-is_mytv_pid() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q "^$APP/launcher"; }
+pid_runs() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -q "^$2"; }
+is_mytv_pid() { pid_runs "$1" "$APP/launcher"; }
 # Fails when the launch it waited on came up: a second launch would then be stale, and could pull
-# myTV over an app the user opened from it meanwhile.
+# myTV over an app the user opened from it meanwhile. $1: SAM's pid for myTV, if already asked.
 clear_ghost() {
-  ghost=$(sam_mytv_pid)
+  ghost=${1:-$(sam_mytv_pid)}
   [ -n "$ghost" ] || return 0
   is_mytv_pid "$ghost" && return 0
-  sleep 5
-  again=$(sam_mytv_pid)
-  is_mytv_pid "$again" && return 1
-  [ "$again" = "$ghost" ] || return 0
+  # inputcommon never turns into myTV, so there is no launch to wait for: this saves 5 s of black
+  # screen on a cold boot
+  if ! pid_runs "$ghost" /usr/bin/com.webos.app.inputcommon; then
+    sleep 5
+    again=$(sam_mytv_pid)
+    is_mytv_pid "$again" && return 1
+    [ "$again" = "$ghost" ] || return 0
+  fi
   timeout -t 5 luna-send -n 1 luna://com.webos.applicationManager/closeByAppId "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
   log "SAM listed myTV under pid $ghost ($(cat "/proc/$ghost/comm" 2>/dev/null)), not myTV: closed the entry"
 }
 
-# A launch that SAM never answers must not stall the main loop.
+# A launch that SAM never answers must not stall the main loop. $1 as for clear_ghost.
 launch_mytv() {
-  clear_ghost || return
+  clear_ghost "$1" || return
   timeout -t 10 luna-send -n 1 luna://com.webos.applicationManager/launch "{\"id\":\"$APP_ID\"}" </dev/null >/dev/null 2>&1
 }
 
@@ -162,66 +189,140 @@ watch_app_close() {
   done
 }
 
-# The subscriber blocks in luna-send, so its loop never sees the off switch: kill both.
-stop_app_close() {
-  [ -n "$1" ] && kill "$1" 2>/dev/null
-  pkill -f 'getForegroundAppInfo .."subscribe":true'
+# The one writer of lastinput while the watcher runs. The main loop can miss a standby: on 23.11 it
+# saw one only after the wake, bootd had opened HDMI 3, and myTV came 3 s later. tvpower's events
+# come in time: the field flips ~0.2 s after "Request Power Off". Every state on the way down points
+# the field where the user should land, and awake puts eim's record back after bootd has read it.
+# The way up ("Prepare Power On" or "Prepare Resume", "LastInput Ready", "Screen On", the last also
+# on leaving the screen saver) is not a way down and leaves the field alone.
+watch_power() {
+  while [ -d "$APP" ] && [ ! -f "$DISABLED" ]; do
+    luna-send -i luna://com.webos.service.tvpower/power/getPowerState '{"subscribe":true}' \
+      </dev/null 2>/dev/null | while read -r line; do
+      case "$line" in
+        *'"processing"'*'Power On'*|*'"processing"'*Resume*|*'"processing"'*LastInput*|*'"processing"'*'Screen On'*) continue ;;
+        *'"state"'*|*'"processing"'*) ;;
+        *) continue ;;
+      esac
+      if [ "$(phase_of "$line")" = awake ]; then
+        restore_lastinput
+        continue
+      fi
+      active_fg=$(cat "$LAST_FG" 2>/dev/null)
+      if lands_on_mytv; then point_lastinput_at_mytv; else restore_lastinput; fi
+    done
+    sleep 2
+  done
 }
 
-MAX_TRIES=2       # per daemon per boot: after this, stay in poll, never ptrace again
-INJECT_TIMEOUT=20 # ezinject fails fast; a longer run means it hung with the daemon stopped
-                  # busybox timeout wants -t SECS, not a bare number (else it runs "20" as the program)
+# A subscriber blocks in luna-send, so its loop never sees the off switch: kill both.
+stop_subscribers() {
+  for pid in "$@"; do kill "$pid" 2>/dev/null; done
+  pkill -f 'luna-send -i luna://com.webos.applicationManager/getForegroundAppInfo .*"subscribe":true'
+  pkill -f 'luna-send -i luna://com.webos.service.tvpower/power/getPowerState .*"subscribe":true'
+  pkill -f "getConfigs .*$KF_EVENT"
+}
 
-# Inject into every daemon not already hooked. Returns 0 when the hook is in all of them.
-# The -l file holds only what the injected code prints; ezinject's own stdout carries the
-# reason an injection fails before the payload runs, so both go to one per-daemon log.
-inject_all() {
-  ok=0
-  for d in $DAEMONS; do
-    pid=$(pidof "$d" | awk '{print $1}')
-    [ -n "$pid" ] || { log "$d not running"; ok=1; continue; }
-    elog=$STATE/inject-$d.log
-    # A package update replaces libmytvhook.so, but the daemon keeps the old one mapped until it
-    # restarts (the library cannot be unloaded). A mapped inode other than the file's = stale:
-    # systemd restarts the daemon clean and the next pass injects the new library.
-    mapped=$(awk '/libmytvhook\.so/ {print $5; exit}' "/proc/$pid/maps" 2>/dev/null)
-    if [ -n "$mapped" ] && [ "$mapped" != "$(stat -c %i "$HOOK/libmytvhook.so" 2>/dev/null)" ]; then
-      log "$d ($pid) runs an older hook, restarting it"
-      kill -9 "$pid" 2>/dev/null
-      ok=1
-      continue
-    fi
-    # Hooked = the library is in this daemon's map (a pid list on disk outlives a reboot that reuses
-    # the pid) and its last injection succeeded (a failed one stays mapped too: the library persists).
-    grep -q libmytvhook.so "/proc/$pid/maps" 2>/dev/null && grep -q "lib_main returned: 0" "$elog" 2>/dev/null && continue
-    tries=$(sed -n "s/^$d //p" "$TRIES" 2>/dev/null); tries=${tries:-0}
-    [ "$tries" -ge "$MAX_TRIES" ] && { ok=1; continue; }
+# busybox timeout wants -t SECS, not a bare number (else it runs the number as the program)
+configd() { timeout -t 10 luna-send -n 1 "$CONFIGD/$1" "$2" </dev/null 2>/dev/null; }
 
-    : > "$elog"     # only this attempt: an older success line must not vouch for it
-    timeout -t "$INJECT_TIMEOUT" "$HOOK/ezinject" -l "$elog" "$pid" "$HOOK/libmytvhook.so" >> "$elog" 2>&1
-    rc=$?
-    if grep -q "lib_main returned: 0" "$elog"; then
-      log "hooked $d ($pid)"
-      continue
-    fi
-    ok=1
-    sed -i "/^$d /d" "$TRIES" 2>/dev/null; echo "$d $((tries + 1))" >> "$TRIES"
-    if [ "$rc" = 124 ] || [ "$rc" = 143 ]; then   # GNU timeout: 124; busybox: the child's SIGTERM
-      # ezinject hung with the daemon's main thread stopped: let systemd restart it clean
-      log "inject $d ($pid) timed out, killing daemon"
-      kill -9 "$pid" 2>/dev/null
-    else
-      log "inject $d ($pid) failed (rc=$rc): $(grep -m1 'ERR' "$elog")"
-    fi
+# What the filter may do, as one configd value. "alive" is a heartbeat: the filter stands down
+# when it is older than 90 s, so a dead watcher never leaves Home pointing at a myTV that nobody
+# checks. configd cannot delete a volatile key it has no default for, hence "home": false and no
+# heartbeat instead of a removal.
+publish_filter_data() {
+  home=true
+  { [ -f "$BYPASS" ] || [ -f "$DISABLED" ]; } && home=false
+  learn=0
+  [ -f "$KEYS_LEARN" ] && learn=$(($(stat -c %Y "$KEYS_LEARN") + LEARN_SECS))
+  binds=$(awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[A-Za-z0-9._-]+$/ { printf "%s\"%s\":\"%s\"", sep, $1, $2; sep = "," }' "$KEYBINDS" 2>/dev/null)
+  configd setConfigs "{\"configs\":{\"$KF_DATA\":{\"alive\":$(date +%s),\"home\":$home,\"learnUntil\":$learn,\"binds\":{$binds}}},\"volatile\":true}" >/dev/null
+}
+
+# Put the filter in front of LG's Home handler. Returns 0 when it is in the chain. surface-manager
+# reads the file as root, so it gets a root-only copy, named after its content: an updated filter
+# has a new name, the list changes, and surface-manager loads it.
+install_filter() {
+  sum=$(md5sum "$HOOK/keyfilter.js" 2>/dev/null | cut -c1-12)
+  [ -n "$sum" ] || return 1
+  kf=$STATE/keyfilter-$sum.js
+  if [ ! -f "$kf" ]; then
+    rm -f "$STATE"/keyfilter-*.js
+    cp "$HOOK/keyfilter.js" "$kf.tmp" && mv "$kf.tmp" "$kf" || return 1
+  fi
+  list=$(configd getConfigs "{\"configNames\":[\"$KF_LIST\"]}" | sed -n "s/.*\"$KF_LIST\":\(\[[^]]*\]\).*/\1/p")
+  case "$list" in
+    *"\"$kf\""*) return 0 ;;
+    *'"handleSystemKeys"'*) ;;
+    *) return 1 ;;   # no list, or not the chain the filter was written for
+  esac
+  entry="{\"handler\":\"$KF_HANDLER\",\"file\":\"$kf\"}"
+  list=$(echo "$list" | sed -e "s/{[^{}]*\"$KF_HANDLER\"[^{}]*},//g" -e "s|{[^{}]*\"handleSystemKeys\"[^{}]*}|$entry,&|")
+  configd setConfigs "{\"configs\":{\"$KF_LIST\":$list}}" | grep -q '"returnValue": *true' || return 1
+  log "key filter in surface-manager's chain: $kf"
+}
+
+# A null puts LG's own list back: the stored value only shadows it. Volatile too, for a list a
+# development build set that way. The null still leaves both names under usrDefined in configd's
+# file, which a stock TV does not have: the file goes when nothing else is in it.
+remove_filter() {
+  configd setConfigs "{\"configs\":{\"$KF_LIST\":null,\"$KF_BOOT\":null}}" >/dev/null
+  configd setConfigs "{\"configs\":{\"$KF_LIST\":null},\"volatile\":true}" >/dev/null
+  rest=$(sed -e "s/\"$KF_LIST\"//g" -e "s/\"$KF_BOOT\"//g" "$CONFIGD_DB" 2>/dev/null | tr -d ' \t\n,')
+  [ "$rest" = '{"com.webos.service.config":{"usrDefined":[]}}' ] && rm -f "$CONFIGD_DB"
+  rm -f "$STATE"/keyfilter-*.js
+  boot_landing=""
+}
+
+# The filter reports through a configd value. Each report becomes the file the rest of the
+# watcher reads: a Home press the filter took, or the button it learned.
+watch_key_events() {
+  while [ -d "$APP" ] && [ ! -f "$DISABLED" ]; do
+    first=1
+    luna-send -i "$CONFIGD/getConfigs" "{\"configNames\":[\"$KF_EVENT\"],\"subscribe\":true}" \
+      </dev/null 2>/dev/null | while read -r line; do
+      [ -n "$first" ] && { first=""; continue; }   # the report from before this subscription
+      case "$line" in
+        *'"type":"home"'*) touch "$PRESSED" ;;
+        *'"type":"learned"'*)
+          [ -f "$KEYS_LEARN" ] && echo "$line" | sed -n 's/.*"code":\([0-9]*\).*/\1/p' > "$KEYS_LEARNED.new" \
+            && mv "$KEYS_LEARNED.new" "$KEYS_LEARNED" ;;
+      esac
+    done
+    sleep 2
   done
-  return $ok
+}
+
+# Up to 1.1 the Home key was taken by a library injected into the two input daemons. It cannot
+# be unloaded and would keep taking the key, so a daemon that still maps it is restarted: systemd
+# brings it back clean.
+unhook_daemons() {
+  for d in lginput2 micomservice; do
+    for pid in $(pidof "$d"); do
+      grep -q libmytvhook.so "/proc/$pid/maps" 2>/dev/null || continue
+      kill -9 "$pid" 2>/dev/null
+      log "$d ($pid) still ran the injected hook, restarted it"
+    done
+  done
+  rm -f "$STATE/tries" "$STATE/pids" "$STATE"/inject-*.log
+}
+
+# The injected hook stored evdev codes; the filter sees Qt keys. Only the IVI button's pair is
+# known, the rest cannot be translated: those buttons are bound again from myTV. The old table
+# stays beside the new one.
+migrate_keybinds() {
+  awk '$1 < 16777216 { old = 1 } END { exit !old }' "$KEYBINDS" 2>/dev/null || return
+  cp -p "$KEYBINDS" "$KEYBINDS.evdev"
+  awk '$1 == 1039 { $1 = 18874410 } $1 >= 16777216' "$KEYBINDS.evdev" > "$KEYBINDS.new" && mv "$KEYBINDS.new" "$KEYBINDS"
+  log "keybinds: evdev codes translated or dropped, the old table is $KEYBINDS.evdev"
 }
 
 run() {
   mkdir -p "$STATE"
-  # ezinject's tempnam() payload file lands here (root-only 0700), not in shared /tmp
-  export TMPDIR="$STATE"
+  unhook_daemons
+  migrate_keybinds
   mode=""
+  tick=0
   prev_fg=""
   strikes=0; strike_start=0; last_launch=0; mytv_seen=0
   # a press from before this watcher started (it survives standby in /tmp) is not a new failure
@@ -231,47 +332,70 @@ run() {
   prev_phase=awake
   [ "$1" = boot ] && prev_phase=asleep
   active_fg=$(cat "$LAST_FG" 2>/dev/null)
+  boot_landing=""
+  # before the filter goes in: its init() must not take an install for a boot
+  configd setConfigs "{\"configs\":{\"$KF_BOOTED\":{\"t\":$(date +%s)}},\"volatile\":true}" >/dev/null
   watch_app_close &
   close_pid=$!
+  watch_key_events &
+  events_pid=$!
+  watch_power &
+  power_pid=$!
   while [ -d "$APP" ] && [ ! -f "$DISABLED" ]; do
     now=$(date +%s)
     phase=$(power_phase)
     fg=$(foreground)
 
     # Wake landing, decided from where we were before standby (active_fg). A real input (HDMI etc.)
-    # is left to bootd as usual. From an app or LG Home, lastinput already tells bootd to open myTV,
-    # and on the wake the watcher launches myTV itself if bootd did not.
+    # is left to bootd as usual. From an app or LG Home, lastinput (watch_power) tells bootd to open
+    # myTV, and on the wake the watcher launches myTV itself if bootd did not. SAM's foreground is
+    # checked against the process: after a cold boot it names myTV with only a ghost behind it.
     if [ "$phase" = asleep ] && [ "$prev_phase" = awake ]; then
-      sync_lastinput   # once more: eim may have written its record on the way down
       log "standby: was in $active_fg"
     elif [ "$phase" = awake ] && [ "$prev_phase" = asleep ]; then
-      [ ! -f "$BYPASS" ] && [ -n "$active_fg" ] && ! is_source "$active_fg" && [ "$fg" != "$APP_ID" ] \
-        && { launch_mytv; log "wake: was in $active_fg, $fg in front -> myTV"; }
+      if lands_on_mytv; then
+        sam_pid=$(sam_mytv_pid)
+        if [ "$fg" != "$APP_ID" ] || ! is_mytv_pid "$sam_pid"; then
+          launch_mytv "$sam_pid"
+          log "wake: was in $active_fg, $fg in front -> myTV"
+        fi
+      fi
+      tick=0   # the heartbeat may have gone stale over the standby
     elif [ "$phase" = awake ] && [ -n "$fg" ] && [ "$fg" != "$active_fg" ]; then
       active_fg=$fg           # steady awake: remember where we are, for the next wake
-      echo "$fg" > "$LAST_FG"
+      echo "$fg" > "$LAST_FG.new" && mv "$LAST_FG.new" "$LAST_FG"   # watch_power reads it any time
     fi
-    [ "$phase" = awake ] && sync_lastinput
+    if [ "$phase" = awake ]; then
+      if lands_on_mytv; then publish_boot_landing true; else publish_boot_landing false; fi
+    elif [ "$phase" = asleep ]; then
+      publish_boot_landing false
+    fi
     [ -n "$phase" ] && prev_phase=$phase
 
-    # After the wake landing: a hung injection can take INJECT_TIMEOUT, and the input shows meanwhile.
-    if lginputhook_owns_home; then
-      new=lginputhook
-    elif inject_all; then
-      new=hook
-    else
-      new=poll
+    # Every 30 s: the heartbeat, which a reconfigure in configd drops, and the chain again, which
+    # an update of the TV may rewrite. Every 5 s until the filter is in.
+    if [ $((tick % 30)) -eq 0 ] || { [ "$mode" != hook ] && [ $((tick % 5)) -eq 0 ]; }; then
+      if lginputhook_owns_home; then
+        new=lginputhook
+        [ "$mode" = hook ] && remove_filter
+      elif install_filter; then
+        new=hook
+        publish_filter_data
+      else
+        new=poll
+      fi
+      [ "$new" != "$mode" ] && { log "mode $new"; mode=$new; echo "$mode" > "$MODE"; }
     fi
-    [ "$new" != "$mode" ] && { log "mode $new"; mode=$new; echo "$mode" > "$MODE"; }
+    tick=$((tick + 1))
 
     # myTV is up again: whatever made it fail is over, give Home back to it.
     if [ "$fg" = "$APP_ID" ]; then
       mytv_seen=$now
-      [ -f "$BYPASS" ] && { rm -f "$BYPASS"; log "myTV is back, bypass off"; }
+      [ -f "$BYPASS" ] && { rm -f "$BYPASS"; publish_filter_data; log "myTV is back, bypass off"; }
       strikes=0
     fi
 
-    # Hook mode: a Home press the hook took should bring myTV up within a few seconds. myTV seen
+    # Hook mode: a Home press the filter took should bring myTV up within a few seconds. myTV seen
     # since the press counts even if the user has already left it for an app.
     if [ "$mode" = hook ] && [ -f "$PRESSED" ]; then
       pressed=$(stat -c %Y "$PRESSED")
@@ -282,15 +406,15 @@ run() {
           strikes=$((strikes + 1))
           log "Home taken but myTV not in front ($fg), strike $strikes"
           if [ "$strikes" -ge 3 ]; then
-            [ -f "$BYPASS" ] || { touch "$BYPASS"; log "bypass on: Home goes to LG Home"; }
+            [ -f "$BYPASS" ] || { touch "$BYPASS"; publish_filter_data; log "bypass on: Home goes to LG Home"; }
           else
-            launch_mytv   # the hook's own launch may be stuck behind a ghost entry
+            launch_mytv   # the filter's own launch may be stuck behind a ghost entry
           fi
         fi
       fi
     fi
 
-    # Catch LG Home after the fact. Poll mode has no hook at all; in hook mode LG Home still opens
+    # Catch LG Home after the fact. Poll mode has no filter at all; in hook mode LG Home still opens
     # without a Home press, e.g. when an app's "Exit app" closes it.
     if { [ "$mode" = poll ] || [ "$mode" = hook ]; } && [ "$fg" = "$LGHOME" ] && [ "$prev_fg" != "$LGHOME" ] && [ ! -f "$BYPASS" ]; then
       if [ -f "$ALLOW" ] && [ $((now - $(stat -c %Y "$ALLOW"))) -lt 30 ]; then
@@ -304,7 +428,8 @@ run() {
     sleep 1
   done
   log "stopping: app gone or turned off"
-  stop_app_close "$close_pid"
+  stop_subscribers "$close_pid" "$events_pid" "$power_pid"
+  remove_filter
   restore_lastinput
   [ -d "$APP" ] || rm -f "$LINK"
   rm -f "$MODE"
@@ -315,7 +440,7 @@ case "$1" in
   install)
     mkdir -p "$STATE" /var/lib/webosbrew/init.d
     chmod 700 "$STATE"
-    rm -f "$DISABLED" "$BYPASS" "$TRIES"
+    rm -f "$DISABLED" "$BYPASS"
     ln -sf "$HOOK/watch.sh" "$LINK"
     start_watcher
     ;;
@@ -323,23 +448,26 @@ case "$1" in
     mkdir -p "$STATE"
     touch "$DISABLED"
     rm -f "$LINK"
-    pkill -f "homehook/watch.sh run"   # the main loop and its app-close subscriber
-    stop_app_close
+    pkill -f "homehook/watch.sh run"   # the main loop and its subscribers
+    stop_subscribers
+    remove_filter
     restore_lastinput
     rm -f "$MODE"
     ;;
   # Remote buttons -> apps. Every command prints the table after it: "<code> <app id>" per line.
-  # learn waits for the next bindable press (the hook takes it from the TV) and prints
+  # learn waits for the next bindable press (the filter takes it from the TV) and prints
   # "learned <code>" first, or nothing when no button came in time.
   learn)
     mkdir -p "$STATE"
     rm -f "$KEYS_LEARNED"
     touch "$KEYS_LEARN"
+    publish_filter_data
     n=0
-    # busybox sleep takes whole seconds; 18 s stays inside the hook's LEARN_SECS window
+    # busybox sleep takes whole seconds; 18 s stays inside the filter's LEARN_SECS window
     while [ ! -s "$KEYS_LEARNED" ] && [ "$n" -lt 18 ]; do sleep 1; n=$((n + 1)); done
     [ -s "$KEYS_LEARNED" ] && echo "learned $(cat "$KEYS_LEARNED")"
     rm -f "$KEYS_LEARN" "$KEYS_LEARNED"
+    publish_filter_data
     cat "$KEYBINDS" 2>/dev/null
     ;;
   bind|unbind)
@@ -347,12 +475,13 @@ case "$1" in
     [ "$1" = unbind ] && { id=$2; code=0; }
     case "$code" in ''|*[!0-9]*) exit 2 ;; esac
     case "$id" in ''|*[!A-Za-z0-9._-]*) exit 2 ;; esac
-    [ "$1" = bind ] && [ "$code" -lt 1024 ] && exit 2
+    [ "$1" = bind ] && [ "$code" -lt 16777216 ] && exit 2   # a Qt key, not an evdev code
     mkdir -p "$STATE"
-    # one button per app and one app per button; replaced atomically, the hook reads it mid-write
+    # one button per app and one app per button
     awk -v c="$code" -v i="$id" '$1 != c && $2 != i' "$KEYBINDS" 2>/dev/null > "$KEYBINDS.new"
     [ "$1" = bind ] && echo "$code $id" >> "$KEYBINDS.new"
     mv "$KEYBINDS.new" "$KEYBINDS"
+    publish_filter_data
     cat "$KEYBINDS"
     ;;
   binds) cat "$KEYBINDS" 2>/dev/null ;;
@@ -368,7 +497,6 @@ case "$1" in
     [ -d "$APP" ] || { rm -f "$LINK"; exit 0; }
     [ -f "$DISABLED" ] && exit 0
     [ -n "$(watcher_pid)" ] && exit 0
-    rm -f "$TRIES"   # a reboot earns the daemons a fresh set of attempts
     start_watcher boot
     ;;
   *) echo "usage: $0 [install|uninstall|status|learn|bind|unbind|binds]" >&2; exit 2 ;;

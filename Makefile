@@ -38,7 +38,7 @@ APP_SRC  := src/main.c src/screensaver.c assets/fonts.c assets/icons.c assets/ci
 APP_OBJ  := $(APP_SRC:%.c=$(B)/%.o) $(B)/src/glass.o
 IPK      := $(B)/$(APP_ID)_$(VERSION)_arm.ipk
 
-.PHONY: all ipk homehook deps assets clean
+.PHONY: all ipk deps assets clean
 all: $(B)/launcher
 
 $(B)/third_party/lvgl/%.o: third_party/lvgl/%.c src/lv_conf.h
@@ -63,14 +63,9 @@ $(B)/src/main.o $(B)/src/screensaver.o: src/*.h src/lv_conf.h assets/*.h
 $(B)/launcher: $(APP_OBJ) $(B)/liblvgl.a
 	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-ipk: $(B)/launcher $(B)/homehook/libmytvhook.so
+ipk: $(B)/launcher
 	$(PYTHON) tools/make_ipk.py --binary $(B)/launcher --sdl $(SDL)/lib/libSDL2-2.0.so.0 \
-	  --package package --out $(B) --repo $(REPO) --homehook $(B)/homehook
-
-# Home key hook (root only): ezinject and the injected library, see homehook/build.sh
-homehook: $(B)/homehook/libmytvhook.so
-$(B)/homehook/libmytvhook.so: homehook/mytvhook.c homehook/CMakeLists.txt homehook/build.sh $(wildcard homehook/*.patch)
-	sh homehook/build.sh $(TOOLCHAIN) $(B)/homehook
+	  --package package --out $(B) --repo $(REPO)
 
 deps:
 	sh tools/fetch_deps.sh deps

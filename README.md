@@ -71,11 +71,12 @@ the TV.
 myTV needs a TV with the [Homebrew Channel](https://www.webosbrew.org/). Root is optional: without
 it, the Home button keeps opening LG Home, and Screen off and Start screensaver do not work.
 
-The Home button hook loads a small library into the TV's input daemons (`lginput2` and
-`micomservice`) with [ezinject](https://github.com/smx-smx/ezinject). If
+The Home button hook adds a key filter to the TV's own key filter chain in `surface-manager`, the
+list LG keeps in the system configuration. Nothing on the TV is patched. The entry is kept across
+reboots, so after a restart the filter is in place early enough to bring myTV up about 23 s after
+power-on. If
 [LG Input Hook](https://github.com/Simon34545/lginputhook) already binds the Home button, myTV leaves
-it alone. After myTV is uninstalled, Home opens LG Home again at once, and the hook is gone after
-the next reboot.
+it alone. After myTV is uninstalled, Home opens LG Home again at once.
 
 Download the `.ipk` from [Releases](https://github.com/ViieeS/mytvlauncher/releases) and install it
 with the Homebrew Channel, [webOS Dev Manager](https://github.com/webosbrew/dev-manager-desktop) or
@@ -132,7 +133,7 @@ run takes about ten minutes, and the installed launcher is put back at the end.
 | `src/main.c` | the UI: home screen, Control Center, Settings, input, Luna calls |
 | `src/screensaver.c` | photo screensaver and StandBy |
 | `src/glass.c` | pre-blurred glass textures, built on a worker thread |
-| `homehook/` | the root-only Home button hook: the injected library, its watcher script, the ezinject build and patch |
+| `homehook/` | the root-only Home button hook: the key filter and its watcher script |
 | `third_party/lvgl` | LVGL 8.3.11 with local patches to its SDL renderer, see `third_party/lvgl-v8.3.11-sdl.patch` |
 | `assets/` | generated fonts, icons and the weather city table |
 | `package/` | `appinfo.json`, icons, bundled wallpapers |

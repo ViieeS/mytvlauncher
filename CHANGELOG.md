@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- After a restart or a power cut while in an app, myTV comes up about 23 s after power-on, after a
+  few seconds of the last input. It used to take 30 to 40 s. Left on an input, the TV still comes
+  back to that input.
+- Power-on after turning the TV off from an app no longer shows the last input for a few seconds
+  before myTV. myTV now records where to land the moment the TV starts to turn off.
+
 ### Added
 
 - The clock rolls a changed digit: the old one rises away, shrinking and fading, as the new one
@@ -30,6 +38,9 @@ All notable changes to this project are documented here. The format follows
 - Everything stays inside Apple TV's safe area, 60 px from the top and bottom of the screen. The
   dock sits 23 px higher and the name under a tile is one line, cut with an ellipsis when long.
   The toast and the screensaver hint moved up too.
+- The Home button hook is now a key filter in the TV's own key filter chain. It no longer injects
+  code into the TV's input daemons, and the package no longer ships ezinject. Most remote buttons
+  bound to apps in 1.1.0 must be assigned again.
 
 ## [1.1.0] - 2026-11-22
 
