@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-25
+
 ### Fixed
 
 - Updating myTV over a running copy no longer leaves the TV on LG Home. If myTV does not come up
@@ -92,7 +94,8 @@ First public release.
 - Home button opens myTV on rooted TVs, and the TV returns to myTV after standby.
 - Settings for the home screen, wallpaper, screensaver, weather, clock and appearance.
 
-[Unreleased]: https://github.com/ViieeS/mytvlauncher/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/ViieeS/mytvlauncher/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.2.1
 [1.2.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.2.0
 [1.1.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.0.0
