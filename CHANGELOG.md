@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-25
+
 ### Fixed
 
 - After a restart or a power cut while in an app, myTV comes up about 23 s after power-on, after a
@@ -84,5 +86,7 @@ First public release.
 - Home button opens myTV on rooted TVs, and the TV returns to myTV after standby.
 - Settings for the home screen, wallpaper, screensaver, weather, clock and appearance.
 
+[Unreleased]: https://github.com/ViieeS/mytvlauncher/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.2.0
 [1.1.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.1.0
 [1.0.0]: https://github.com/ViieeS/mytvlauncher/releases/tag/v1.0.0
